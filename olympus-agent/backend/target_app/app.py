@@ -9,7 +9,7 @@ def calculate_interest(principal: float, rate: float, time_years: float) -> floa
 
 def calculate_total(price: float, discount_percent: float = 0) -> float:
     if price < 0:
-        return 0
+        raise ValueError("Invalid price value")
     discount_amount = price * (discount_percent / 100)
     return price - discount_amount
 
