@@ -1,4 +1,4 @@
-﻿<div align="center">
+<div align="center">
 
 # 🏛️ Project Olympus
 
@@ -163,42 +163,45 @@ cd backend
 docker build -t olympus-sandbox .
 ```
 
-### 4. Set Up the Backend
+### 4. Set Up & Run the Backend
 
 ```bash
-cd backend
+cd olympus-agent/backend
 
-# Create and activate virtual environment
-python -m venv ../venv
+# Create and activate virtual environment (optional but recommended)
+python -m venv venv
 
-# Windows:
-..\venv\Scripts\activate
-# macOS/Linux:
-source ../venv/bin/activate
+# Windows (PowerShell):
+.\venv\Scripts\Activate.ps1
+# macOS / Linux:
+source venv/bin/activate
 
-# Install dependencies
-pip install fastapi uvicorn langgraph langchain langchain-groq \
-    langchain-openai langchain-google-genai chromadb \
-    tree-sitter-language-pack gitpython PyGithub \
-    python-dotenv opentelemetry-sdk opentelemetry-api \
-    sigstore semgrep
+# Install all backend Python dependencies
+pip install -r requirements.txt
 
-# Start the backend server
+# Start the FastAPI backend server
 python src/server.py
-# Server runs at http://localhost:8000
+# Backend server runs at http://localhost:8000
 ```
 
-### 5. Set Up the Frontend
+### 5. Set Up & Run the Frontend
 
 ```bash
-cd frontend
+cd olympus-agent/frontend
 
-# Install dependencies
+# Create local environment config
+cp .env.local.example .env.local
+
+# Add your GitHub OAuth app credentials to .env.local:
+# GITHUB_CLIENT_ID=your_id
+# GITHUB_CLIENT_SECRET=your_secret
+
+# Install Node dependencies
 npm install
 
-# Start the development server
+# Start Next.js development server
 npm run dev
-# UI available at http://localhost:3000
+# Frontend UI available at http://localhost:3000
 ```
 
 ### 6. Open the Dashboard
