@@ -18,30 +18,30 @@ export default async function LoginPage({
   const oauthUrl = buildGithubOAuthUrl();
 
   const errorMessages: Record<string, string> = {
-    oauth_denied: "GitHub OAuth was denied. Please try again.",
-    token_exchange_failed: "Failed to exchange OAuth token. Check your Client Secret.",
-    github_api_failed: "Could not reach GitHub API. Try again later.",
-    unauthorized: "Your GitHub account is not on the allowlist.",
+    oauth_denied: "GitHub OAuth permission was denied.",
+    token_exchange_failed: "Failed to exchange OAuth token with GitHub.",
+    github_api_failed: "Could not retrieve user details from GitHub.",
+    unauthorized: "Your GitHub account is not authorized to access this instance.",
   };
 
   return (
     <div
       className="min-h-screen flex items-center justify-center p-4"
       style={{
-        background: "radial-gradient(ellipse 80% 60% at 50% 0%, rgba(99,102,241,0.12) 0%, var(--bg-base) 60%)",
+        background: "radial-gradient(ellipse 80% 60% at 50% 0%, rgba(99,102,241,0.15) 0%, var(--bg-base) 60%)",
       }}
     >
-      {/* Subtle grid background */}
+      {/* Background Grid */}
       <div
         className="fixed inset-0 pointer-events-none"
         style={{
           backgroundImage:
-            "linear-gradient(rgba(99,102,241,0.04) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.04) 1px, transparent 1px)",
+            "linear-gradient(rgba(99,102,241,0.05) 1px, transparent 1px), linear-gradient(90deg, rgba(99,102,241,0.05) 1px, transparent 1px)",
           backgroundSize: "40px 40px",
         }}
       />
 
-      <div className="relative w-full max-w-sm animate-slide-in">
+      <div className="relative w-full max-w-md animate-slide-in">
         {/* Card */}
         <div
           className="rounded-2xl p-8 shadow-2xl"
@@ -49,30 +49,30 @@ export default async function LoginPage({
             background: "rgba(13,27,46,0.85)",
             backdropFilter: "blur(20px)",
             border: "1px solid var(--border-muted)",
-            boxShadow: "0 0 0 1px rgba(99,102,241,0.1), 0 25px 50px rgba(0,0,0,0.6)",
+            boxShadow: "0 0 0 1px rgba(99,102,241,0.15), 0 25px 50px rgba(0,0,0,0.6)",
           }}
         >
-          {/* Logo + Title */}
+          {/* Logo */}
           <div className="text-center mb-8">
             <div
-              className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4"
+              className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
               style={{
                 background: "var(--indigo-glow)",
-                border: "1px solid rgba(99,102,241,0.3)",
+                border: "1px solid rgba(99,102,241,0.4)",
               }}
             >
-              <span className="text-2xl">🏛️</span>
+              <span className="text-3xl">🏛️</span>
             </div>
-            <h1 className="text-xl font-bold gradient-text mb-1">Project Olympus</h1>
-            <p className="text-xs" style={{ color: "var(--text-muted)" }}>
-              Autonomous SRE Engine · v2.0
+            <h1 className="text-2xl font-bold gradient-text mb-1">Project Olympus</h1>
+            <p className="text-xs font-mono" style={{ color: "var(--text-muted)" }}>
+              Autonomous SRE Engine · Auth Gatekeeper
             </p>
           </div>
 
-          {/* Error */}
+          {/* Error Message */}
           {error && errorMessages[error] && (
             <div
-              className="mb-4 p-3 rounded-lg text-xs font-mono text-center animate-fade-in"
+              className="mb-6 p-3.5 rounded-lg text-xs font-mono text-center animate-fade-in"
               style={{
                 background: "var(--error-glow)",
                 border: "1px solid rgba(244,63,94,0.3)",
@@ -83,45 +83,39 @@ export default async function LoginPage({
             </div>
           )}
 
-          {/* Divider */}
-          <div className="mb-6">
-            <p className="text-xs text-center mb-5" style={{ color: "var(--text-secondary)" }}>
-              Sign in to access the autonomous repair engine
+          {/* Body */}
+          <div className="space-y-5 mb-6">
+            <p className="text-xs text-center leading-relaxed" style={{ color: "var(--text-secondary)" }}>
+              Sign in with your GitHub account to access the autonomous repair console and trigger pipelines.
             </p>
 
-            {/* GitHub OAuth button */}
             <a
               href={oauthUrl}
-              className="flex items-center justify-center gap-3 w-full py-3 px-4 rounded-xl font-medium text-sm transition-all duration-200 group"
-              style={{
-                background: "rgba(255,255,255,0.06)",
-                border: "1px solid rgba(255,255,255,0.12)",
-                color: "var(--text-primary)",
-              }}
-              onMouseEnter={(e) => {
-                (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.1)";
-                (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.2)";
-              }}
-              onMouseLeave={(e) => {
-                (e.currentTarget as HTMLElement).style.background = "rgba(255,255,255,0.06)";
-                (e.currentTarget as HTMLElement).style.borderColor = "rgba(255,255,255,0.12)";
-              }}
+              className="flex items-center justify-center gap-3 w-full py-3.5 px-4 rounded-xl font-medium text-sm transition-all duration-200 hover:bg-white/10 active:scale-[0.99] border border-white/10 hover:border-white/20 text-white shadow-lg shadow-black/40"
+              style={{ background: "rgba(255,255,255,0.06)" }}
             >
               <GithubIcon />
-              Continue with GitHub
+              Sign in with GitHub
             </a>
           </div>
 
           {/* Footer */}
-          <p className="text-center text-xs" style={{ color: "var(--text-muted)" }}>
-            Only authorized GitHub accounts can sign in.
-          </p>
+          <div className="pt-4 border-t border-slate-800 text-center">
+            <p className="text-[11px]" style={{ color: "var(--text-muted)" }}>
+              Keyless Sigstore Attestations · Sandboxed Pytest · Semgrep SAST
+            </p>
+          </div>
         </div>
 
-        {/* Bottom label */}
-        <p className="text-center text-xs mt-4" style={{ color: "var(--text-muted)" }}>
-          Self-healing code · Verified PRs · Sandboxed validation
-        </p>
+        {/* Return to home link */}
+        <div className="text-center mt-6">
+          <a
+            href="/"
+            className="text-xs font-mono text-slate-400 hover:text-indigo-400 transition-colors"
+          >
+            ← Back to Product Overview
+          </a>
+        </div>
       </div>
     </div>
   );
