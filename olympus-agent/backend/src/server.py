@@ -1,99 +1,228 @@
 import sys
 import os
-import asyncio
-import json
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+import re
+import subprocess
+from pathlib import Path
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from dotenv import load_dotenv, find_dotenv
+from git import Repo  # Fixed case-sensitivity: lowercase 'git'
 
-# Add parent directory to path to locate agents module
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# Ensure backend pathing is cleanly resolved
+CURRENT_DIR = Path(__file__).resolve().parent
+BACKEND_DIR = CURRENT_DIR.parent
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
+
+load_dotenv(find_dotenv(), override=True)
 
 from src.agents.core_graph import app as graph_app
+from database.db import init_db
+from utils.github_pr import create_github_pull_request
 
-server = FastAPI(
-    title="Olympus SRE Agent API",
-    description="Backend API and WebSocket stream for autonomous code patching",
-    version="1.0.0"
-)
+app = FastAPI(title="Project Olympus SRE API", version="2.0")
 
-# Allow CORS for future frontend integration
-server.add_middleware(
+# Enable CORS for Next.js Frontend
+app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000", "*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-class RunAgentRequest(BaseModel):
-    bug_description: str = "Initial bug trace"
-    target_file: str = ""
+# Initialize persistent database
+init_db()
 
-@server.get("/")
-def health_check():
-    return {
-        "status": "online",
-        "system": "Project Olympus SRE Engine",
-        "version": "1.0.0"
+
+# Unified Pydantic Request Model
+class TriggerRequest(BaseModel):
+    bug_description: str = "Automated bug report trigger"
+    target_file: str = ""       # Optional: leave blank for Autonomous Fault Auto-Detection
+    repo_url: str = ""          # e.g., "https://github.com/Aviral445/Imagex"
+    repo_name: str = ""         # e.g., "Aviral445/Imagex"
+    max_attempts: int = 5
+
+
+def prepare_workspace(repo_url: str) -> tuple[str, str]:
+    """Clones a remote repository into a temporary workspace if provided.
+    Returns (workspace_dir, parsed_repo_name).
+    """
+    if not repo_url or not repo_url.startswith("http"):
+        return "", ""
+
+    # Clean URL and extract 'owner/repo'
+    clean_url = repo_url.rstrip("/").removesuffix(".git")
+    parts = clean_url.split("/")
+    repo_name = f"{parts[-2]}/{parts[-1]}" if len(parts) >= 2 else parts[-1]
+    folder_name = parts[-1]
+
+    workspace_dir = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), f"../workspaces/{folder_name}")
+    )
+
+    if os.path.exists(workspace_dir):
+        print(f"📂 [Workspace Manager]: Using existing workspace at {workspace_dir}")
+    else:
+        print(f"📥 [Workspace Manager]: Cloning remote repo {repo_url} into {workspace_dir}...")
+        os.makedirs(os.path.dirname(workspace_dir), exist_ok=True)
+        Repo.clone_from(repo_url, workspace_dir)
+
+    return workspace_dir, repo_name
+
+
+def auto_discover_target_file(workspace_dir: str) -> str:
+    """Runs pytest in the workspace, parses failure stack trace, and returns the broken file path."""
+    print(f"🔍 [Fault Localizer]: Running automated test discovery in {workspace_dir}...")
+    
+    try:
+        # Execute pytest in the context of the cloned workspace
+        result = subprocess.run(
+            [sys.executable, "-m", "pytest"],
+            cwd=workspace_dir,
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        output = result.stdout + "\n" + result.stderr
+        
+        # Parse output for failing Python file paths from tracebacks
+        matches = re.findall(r'File\s+"([^"]+\.py)"', output)
+        
+        if matches:
+            for file_path in matches:
+                # Prioritize primary source files over test suite files
+                if not os.path.basename(file_path).startswith("test_"):
+                    abs_path = os.path.abspath(file_path) if os.path.isabs(file_path) else os.path.join(workspace_dir, file_path)
+                    if os.path.exists(abs_path):
+                        print(f"🎯 [Fault Localizer]: Identified culprit file from traceback: {abs_path}")
+                        return abs_path
+            
+            # Fallback to first matched file
+            first_match = matches[0]
+            abs_path = os.path.abspath(first_match) if os.path.isabs(first_match) else os.path.join(workspace_dir, first_match)
+            if os.path.exists(abs_path):
+                return abs_path
+
+    except Exception as e:
+        print(f"⚠️ [Fault Localizer]: Test execution warning: {e}")
+
+    # Fallback: Scan repository tree for main Python source files
+    for root, _, files in os.walk(workspace_dir):
+        for f in files:
+            if f.endswith(".py") and not f.startswith("test_") and f != "setup.py":
+                found_path = os.path.join(root, f)
+                print(f"🎯 [Fault Localizer]: Auto-selected primary source file: {found_path}")
+                return found_path
+
+    return ""
+
+
+def run_olympus_pipeline(
+    target_file: str = "", repo_url: str = "", repo_name: str = "", max_attempts: int = 5
+):
+    """Executes the LangGraph repair loop and opens a PR on success."""
+    active_target = target_file
+    target_repo = repo_name
+
+    # 1. Handle remote repo cloning & fault localization if repo_url is provided
+    if repo_url:
+        workspace_dir, parsed_repo_name = prepare_workspace(repo_url)
+        if workspace_dir:
+            if not target_repo:
+                target_repo = parsed_repo_name
+            
+            resolved_target = os.path.join(workspace_dir, target_file) if target_file else ""
+            
+            if resolved_target and os.path.exists(resolved_target):
+                active_target = resolved_target
+            else:
+                print(f"🔍 Target file '{target_file}' not specified or not found. Switching to Autonomous Fault Localizer...")
+                active_target = auto_discover_target_file(workspace_dir)
+
+    # 2. Fallback for local workspace if no active_target resolved
+    if not active_target:
+        active_target = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "../target_app/app.py")
+        )
+
+    print(f"⚡ [Olympus Engine]: Initiating fix loop on target file: {active_target}")
+
+    initial_state = {
+        "bug_description": "Automated webhook/API trigger",
+        "proposed_fix": "",
+        "test_result": "Initial run required",
+        "attempt_count": 0,
+        "target_file": active_target,
+        "last_diff": "",
+        "history": [],
     }
 
-@server.websocket("/ws/run-agent")
-async def websocket_agent_run(websocket: WebSocket):
-    """
-    Streams live LangGraph execution state, patch attempts, 
-    and sandbox verification logs over WebSocket.
-    """
-    await websocket.accept()
-    await websocket.send_json({
-        "event": "connected",
-        "message": "Connected to Olympus SRE Execution Engine"
-    })
+    final_state = graph_app.invoke(initial_state)
 
-    try:
-        data = await websocket.receive_text()
-        params = json.loads(data) if data else {}
-        
-        initial_state = {
-            "bug_description": params.get("bug_description", "Triggered via WebSocket"),
-            "proposed_fix": "",
-            "test_result": "Initial run required",
-            "attempt_count": 0,
-            "target_file": params.get("target_file", ""),
-            "history": []
-        }
+    if "PASS" in final_state.get("test_result", ""):
+        print("🎉 [Olympus Pipeline]: Patch succeeded! Opening GitHub Pull Request...")
+        attempts = final_state.get("attempt_count", 1)
+        patch_diff = final_state.get("last_diff", "")
+        branch_name = f"olympus/patch-attempt-{attempts}"
 
-        await websocket.send_json({
-            "event": "start",
-            "message": "Starting Project Olympus State Machine...",
-            "state": initial_state
-        })
+        final_repo = target_repo if target_repo else os.getenv("GITHUB_REPO", "")
 
-        # Run the graph and stream steps asynchronously
-        loop = asyncio.get_running_loop()
+        if final_repo:
+            create_github_pull_request(
+                repo_name=final_repo,
+                branch_name=branch_name,
+                patch_diff=patch_diff,
+                target_file=active_target,
+                attempts_taken=attempts,
+            )
 
-        def execute_step(state):
-            return graph_app.invoke(state)
 
-        # Run execution in threadpool to prevent blocking the async socket loop
-        final_state = await loop.run_in_executor(None, execute_step, initial_state)
+@app.get("/health")
+def health_check():
+    return {"status": "healthy", "service": "Project Olympus SRE Engine"}
 
-        await websocket.send_json({
-            "event": "complete",
-            "message": "Execution finished cleanly!",
-            "final_state": {
-                "attempt_count": final_state.get("attempt_count"),
-                "test_result": final_state.get("test_result"),
-                "history": final_state.get("history")
-            }
-        })
 
-    except WebSocketDisconnect:
-        print("🔌 Client disconnected from WebSocket stream.")
-    except Exception as e:
-        await websocket.send_json({
-            "event": "error",
-            "error": str(e)
-        })
-    finally:
-        await websocket.close()
+@app.post("/api/v1/trigger")
+def trigger_fix(req: TriggerRequest, background_tasks: BackgroundTasks):
+    """Manual or API-driven trigger endpoint."""
+    background_tasks.add_task(
+        run_olympus_pipeline,
+        target_file=req.target_file,
+        repo_url=req.repo_url,
+        repo_name=req.repo_name,
+        max_attempts=req.max_attempts,
+    )
+    return {
+        "status": "initiated",
+        "message": "Olympus repair pipeline running in background.",
+        "target_file": req.target_file or "Autonomous Auto-Detect",
+        "repo_url": req.repo_url,
+    }
+
+
+@app.post("/api/v1/github-webhook")
+async def github_webhook(request: Request, background_tasks: BackgroundTasks):
+    """Listens for GitHub Webhook events."""
+    payload = await request.json()
+    repo_name = payload.get("repository", {}).get("full_name", "")
+    repo_url = payload.get("repository", {}).get("html_url", "")
+    action = payload.get("action", "")
+
+    print(f"📩 [Webhook Received]: Repo: '{repo_name}' | Action: '{action}'")
+
+    background_tasks.add_task(
+        run_olympus_pipeline,
+        repo_url=repo_url,
+        repo_name=repo_name,
+    )
+
+    return {"status": "received", "repo": repo_name}
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)

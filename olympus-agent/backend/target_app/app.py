@@ -1,5 +1,20 @@
-def calculate_total(price, discount):
-    return max(0, price - discount)
+def calculate_interest(principal: float, rate: float, time_years: float) -> float:
+    if principal < 0:
+        raise ValueError("Invalid principal value")
+    if rate < 0:
+        raise ValueError("Invalid rate value")
+    if time_years <= 0:
+        raise ValueError("Invalid time years value")
+    return principal * (rate / 100) * time_years
+
+def calculate_total(price: float, discount_percent: float = 0) -> float:
+    if price < 0:
+        return 0
+    discount_amount = price * (discount_percent / 100)
+    return price - discount_amount
+
+def apply_percentage_discount(price, discount_percent):
+    return price - (price * (discount_percent / 100))
 
 def main():
     price = 100
