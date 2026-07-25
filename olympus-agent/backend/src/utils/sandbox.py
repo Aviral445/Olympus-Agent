@@ -12,18 +12,26 @@ def find_project_root(current_path: str, anchor: str = ".env") -> str:
             raise FileNotFoundError(f"Could not locate project root containing '{anchor}' anchor.")
         dirname = parent
 
-def run_in_sandbox(target_file_path: str) -> dict:
+def run_in_sandbox(target_file_path: str, test_dir: str = "") -> dict:
     """
-    Executes pytest inside the olympus-sandbox Docker container using native CLI subprocess calls
-    to prevent silent process termination on Windows.
+    Executes pytest inside the olympus-sandbox Docker container.
+    
+    Args:
+        target_file_path: The source file being patched (used for root discovery fallback).
+        test_dir: Optional explicit directory to mount. Use for external/cloned repos.
+                  If empty, falls back to the local backend/target_app directory.
     """
     try:
-        root_dir = find_project_root(os.path.dirname(target_file_path))
-        target_dir = (Path(root_dir) / "backend" / "target_app").resolve()
-        
-        # Fallback if backend/target_app isn't found at the root level directly
-        if not target_dir.exists():
-            target_dir = (Path(root_dir) / "target_app").resolve()
+        if test_dir and os.path.isdir(test_dir):
+            # FIX: use provided workspace dir directly for external repos
+            target_dir = Path(test_dir).resolve()
+        else:
+            root_dir = find_project_root(os.path.dirname(target_file_path))
+            target_dir = (Path(root_dir) / "backend" / "target_app").resolve()
+
+            # Fallback if backend/target_app isn't found at the root level directly
+            if not target_dir.exists():
+                target_dir = (Path(root_dir) / "target_app").resolve()
 
         clean_target_dir = target_dir.as_posix()
 

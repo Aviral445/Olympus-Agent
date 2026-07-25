@@ -12,3 +12,6 @@ __pycache__/
 # Test caches & artifacts
 .pytest_cache/
 *.diff
+
+# Workspace clones (dynamically cloned repos, not tracked)
+**/workspaces/

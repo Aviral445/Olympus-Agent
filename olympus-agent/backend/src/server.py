@@ -1,10 +1,14 @@
 import sys
 import os
 import re
+import uuid
+import json
+import asyncio
 import subprocess
 from pathlib import Path
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv, find_dotenv
 from git import Repo  # Fixed case-sensitivity: lowercase 'git'
@@ -20,6 +24,7 @@ load_dotenv(find_dotenv(), override=True)
 from src.agents.core_graph import app as graph_app
 from database.db import init_db
 from utils.github_pr import create_github_pull_request
+from utils.run_logger import create_run, set_run_context, complete_run, get_run_snapshot
 
 app = FastAPI(title="Project Olympus SRE API", version="2.0")
 
@@ -121,21 +126,30 @@ def auto_discover_target_file(workspace_dir: str) -> str:
 
 
 def run_olympus_pipeline(
-    target_file: str = "", repo_url: str = "", repo_name: str = "", max_attempts: int = 5
+    run_id: str,
+    target_file: str = "",
+    repo_url: str = "",
+    repo_name: str = "",
+    max_attempts: int = 5
 ):
     """Executes the LangGraph repair loop and opens a PR on success."""
+    # Bind this background thread to the run so push_log() knows where to write
+    set_run_context(run_id)
+
     active_target = target_file
     target_repo = repo_name
+    workspace_dir = ""
 
     # 1. Handle remote repo cloning & fault localization if repo_url is provided
     if repo_url:
-        workspace_dir, parsed_repo_name = prepare_workspace(repo_url)
-        if workspace_dir:
+        workspace_dir_result, parsed_repo_name = prepare_workspace(repo_url)
+        if workspace_dir_result:
+            workspace_dir = workspace_dir_result
             if not target_repo:
                 target_repo = parsed_repo_name
-            
+
             resolved_target = os.path.join(workspace_dir, target_file) if target_file else ""
-            
+
             if resolved_target and os.path.exists(resolved_target):
                 active_target = resolved_target
             else:
@@ -155,17 +169,20 @@ def run_olympus_pipeline(
         "proposed_fix": "",
         "test_result": "Initial run required",
         "attempt_count": 0,
+        "max_attempts": max_attempts,      # FIX: now threaded from API request
         "target_file": active_target,
+        "workspace_dir": workspace_dir,    # FIX: passed for sandbox to mount correctly
         "last_diff": "",
         "history": [],
     }
 
     final_state = graph_app.invoke(initial_state)
+    final_diff = final_state.get("last_diff", "")
 
     if "PASS" in final_state.get("test_result", ""):
         print("🎉 [Olympus Pipeline]: Patch succeeded! Opening GitHub Pull Request...")
         attempts = final_state.get("attempt_count", 1)
-        patch_diff = final_state.get("last_diff", "")
+        patch_diff = final_diff
         branch_name = f"olympus/patch-attempt-{attempts}"
 
         final_repo = target_repo if target_repo else os.getenv("GITHUB_REPO", "")
@@ -179,17 +196,66 @@ def run_olympus_pipeline(
                 attempts_taken=attempts,
             )
 
+        complete_run(run_id, result="PASS", diff=patch_diff)
+    else:
+        complete_run(run_id, result="FAIL", diff=final_diff)
+
 
 @app.get("/health")
 def health_check():
     return {"status": "healthy", "service": "Project Olympus SRE Engine"}
 
 
+@app.get("/api/v1/stream/{run_id}")
+async def stream_run_logs(run_id: str):
+    """
+    SSE endpoint: streams real-time log messages for a pipeline run to the frontend.
+    The frontend connects here immediately after triggering a fix and reads until 'done'.
+    """
+    snapshot = get_run_snapshot(run_id)
+    if not snapshot:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found.")
+
+    async def event_generator():
+        last_idx = 0
+        while True:
+            snap = get_run_snapshot(run_id)
+            logs = snap.get("logs", [])
+
+            # Flush all newly arrived log lines
+            while last_idx < len(logs):
+                payload = json.dumps({"type": "log", "message": logs[last_idx]})
+                yield f"data: {payload}\n\n"
+                last_idx += 1
+
+            if snap.get("done"):
+                # Send final completion event with result + diff, then close
+                final = json.dumps({
+                    "type": "complete",
+                    "result": snap.get("result"),
+                    "diff": snap.get("diff", ""),
+                })
+                yield f"data: {final}\n\n"
+                break
+
+            await asyncio.sleep(0.4)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 @app.post("/api/v1/trigger")
 def trigger_fix(req: TriggerRequest, background_tasks: BackgroundTasks):
-    """Manual or API-driven trigger endpoint."""
+    """Manual or API-driven trigger endpoint. Returns a run_id for SSE log streaming."""
+    run_id = str(uuid.uuid4())
+    create_run(run_id)  # Reserve log store slot before background task starts
+
     background_tasks.add_task(
         run_olympus_pipeline,
+        run_id=run_id,
         target_file=req.target_file,
         repo_url=req.repo_url,
         repo_name=req.repo_name,
@@ -197,7 +263,8 @@ def trigger_fix(req: TriggerRequest, background_tasks: BackgroundTasks):
     )
     return {
         "status": "initiated",
-        "message": "Olympus repair pipeline running in background.",
+        "run_id": run_id,
+        "message": "Olympus repair pipeline running. Connect to /api/v1/stream/{run_id} for live logs.",
         "target_file": req.target_file or "Autonomous Auto-Detect",
         "repo_url": req.repo_url,
     }
@@ -213,13 +280,17 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 
     print(f"📩 [Webhook Received]: Repo: '{repo_name}' | Action: '{action}'")
 
+    run_id = str(uuid.uuid4())
+    create_run(run_id)
+
     background_tasks.add_task(
         run_olympus_pipeline,
+        run_id=run_id,
         repo_url=repo_url,
         repo_name=repo_name,
     )
 
-    return {"status": "received", "repo": repo_name}
+    return {"status": "received", "repo": repo_name, "run_id": run_id}
 
 
 if __name__ == "__main__":
