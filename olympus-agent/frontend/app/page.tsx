@@ -1,5 +1,8 @@
-"use client";
+import { redirect } from "next/navigation";
+import { getSession } from "@/lib/auth";
+import Dashboard from "@/components/Dashboard";
 
+<<<<<<< HEAD
 import React, { useState, useRef, useEffect } from "react";
 import { AgentGraph } from "@/components/graph-flow/AgentGraph";
 import { DiffViewer } from "@/components/diff-viewer/DiffViewer";
@@ -342,4 +345,10 @@ export default function Home() {
       </div>
     </main>
   );
+=======
+export default async function Home() {
+  const session = await getSession();
+  if (!session) redirect("/login");
+  return <Dashboard session={session} />;
+>>>>>>> 5660292 (feat(frontend/backend): complete frontend UI overhaul, OAuth auth, telemetry, and runs history API)
 }

@@ -1,26 +1,138 @@
 @import "tailwindcss";
 
+/* ─── Design Tokens ─────────────────────────────────────────────── */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg-base:       #07111d;
+  --bg-surface:    #0d1b2e;
+  --bg-elevated:   #112240;
+  --bg-input:      #0a1628;
+
+  --border-subtle: #162035;
+  --border-muted:  #1e304e;
+  --border-active: #4f6ef7;
+
+  --indigo:        #6366f1;
+  --indigo-light:  #818cf8;
+  --indigo-glow:   rgba(99, 102, 241, 0.18);
+  --violet:        #7c3aed;
+  --sky:           #38bdf8;
+
+  --success:       #10b981;
+  --success-glow:  rgba(16, 185, 129, 0.15);
+  --error:         #f43f5e;
+  --error-glow:    rgba(244, 63, 94, 0.15);
+  --warning:       #f59e0b;
+  --warning-glow:  rgba(245, 158, 11, 0.12);
+
+  --text-primary:  #e8f0fe;
+  --text-secondary:#94a3b8;
+  --text-muted:    #4a5e7a;
+
+  --sidebar-w:     220px;
+  --radius-sm:     6px;
+  --radius-md:     10px;
+  --radius-lg:     14px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+/* ─── Base ───────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: var(--font-geist-sans, 'Inter', system-ui, sans-serif);
+  -webkit-font-smoothing: antialiased;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+/* ─── Custom Scrollbar ───────────────────────────────────────────── */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: var(--border-muted);
+  border-radius: 99px;
+}
+::-webkit-scrollbar-thumb:hover { background: var(--indigo); }
+
+/* ─── Animations ─────────────────────────────────────────────────── */
+@keyframes pulse-ring {
+  0%   { box-shadow: 0 0 0 0 var(--indigo-glow); }
+  70%  { box-shadow: 0 0 0 8px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@keyframes success-ring {
+  0%   { box-shadow: 0 0 0 0 var(--success-glow); }
+  70%  { box-shadow: 0 0 0 8px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
 }
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes gradient-shift {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+@keyframes blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.2; }
+}
+
+/* ─── Utility classes ────────────────────────────────────────────── */
+.animate-slide-in { animation: slide-in 0.25s ease both; }
+.animate-fade-in  { animation: fade-in  0.2s ease both; }
+.animate-pulse-ring { animation: pulse-ring 1.6s ease infinite; }
+.animate-success-ring { animation: success-ring 1.2s ease; }
+
+/* Gradient header text */
+.gradient-text {
+  background: linear-gradient(135deg, #818cf8 0%, #38bdf8 50%, #10b981 100%);
+  background-size: 200% 200%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  animation: gradient-shift 6s ease infinite;
+}
+
+/* Glass card */
+.glass {
+  background: rgba(13, 27, 46, 0.7);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-muted);
+}
+
+/* Glow border on focus/active */
+.glow-border {
+  border-color: var(--indigo) !important;
+  box-shadow: 0 0 0 3px var(--indigo-glow);
+}
+
+/* Live blinking dot */
+.live-dot::before {
+  content: '';
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success);
+  margin-right: 6px;
+  animation: blink 1.2s ease infinite;
+}
+
+/* Status colours */
+.status-pass { color: var(--success); background: var(--success-glow); }
+.status-fail { color: var(--error);   background: var(--error-glow); }
+.status-run  { color: var(--indigo-light); background: var(--indigo-glow); }

@@ -22,7 +22,7 @@ if str(BACKEND_DIR) not in sys.path:
 load_dotenv(find_dotenv(), override=True)
 
 from src.agents.core_graph import app as graph_app
-from database.db import init_db
+from database.db import init_db, get_runs
 from utils.github_pr import create_github_pull_request
 from utils.run_logger import create_run, set_run_context, complete_run, get_run_snapshot
 
@@ -204,6 +204,13 @@ def run_olympus_pipeline(
 @app.get("/health")
 def health_check():
     return {"status": "healthy", "service": "Project Olympus SRE Engine"}
+
+
+@app.get("/api/v1/runs")
+def list_runs(limit: int = 50):
+    """Returns paginated run history from the SQLite audit log for the history dashboard."""
+    runs = get_runs(limit=min(limit, 200))
+    return {"runs": runs, "count": len(runs)}
 
 
 @app.get("/api/v1/stream/{run_id}")
