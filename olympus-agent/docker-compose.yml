@@ -1,0 +1,69 @@
+version: "3.8"
+
+services:
+  # ─────────────────────────────────────────────────────────────────
+  #  Kafka Broker (KRaft mode — no ZooKeeper required)
+  # ─────────────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.7.0
+    container_name: olympus-kafka
+    hostname: kafka
+    ports:
+      - "9092:9092"   # Client listener (localhost)
+      - "9093:9093"   # Controller listener (internal)
+    environment:
+      # KRaft: no ZooKeeper
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: "broker,controller"
+      KAFKA_CONTROLLER_QUORUM_VOTERS: "1@kafka:9093"
+      KAFKA_CONTROLLER_LISTENER_NAMES: "CONTROLLER"
+      CLUSTER_ID: "MkU3OEVBNTcwNTJENDM2Qk"
+
+      # Listeners
+      KAFKA_LISTENERS: "PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093"
+      KAFKA_ADVERTISED_LISTENERS: "PLAINTEXT://localhost:9092"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "PLAINTEXT"
+
+      # Topic defaults
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_NUM_PARTITIONS: 4
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+
+      # Log retention (24h — enough for SSE replay)
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_LOG_SEGMENT_BYTES: 10485760   # 10 MB
+
+      # Performance
+      KAFKA_SOCKET_SEND_BUFFER_BYTES: 102400
+      KAFKA_SOCKET_RECEIVE_BUFFER_BYTES: 102400
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: kafka-broker-api-versions --bootstrap-server localhost:9092 || exit 1
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # ─────────────────────────────────────────────────────────────────
+  #  Kafka UI — Redpanda Console (lightweight browser admin)
+  #  Access at http://localhost:8080
+  # ─────────────────────────────────────────────────────────────────
+  kafka-ui:
+    image: redpandadata/console:latest
+    container_name: olympus-kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_BROKERS: "kafka:9092"
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+volumes:
+  kafka_data:
+    driver: local

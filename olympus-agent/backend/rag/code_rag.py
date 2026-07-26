@@ -1,6 +1,17 @@
+"""
+Code RAG — Tree-sitter AST chunker + ChromaDB vector index.
+
+Upgraded from v1:
+  - retrieve_relevant_code_context() now uses hybrid BM25+vector retrieval
+    via rag_api.query_rag() (pre-filter 10 semantic candidates, re-rank top-3).
+  - index_codebase_rag() tags every chunk with the indexing run_id for
+    traceability (metadata field "run_id").
+  - chunk_file_with_treesitter() unchanged — still uses Tree-sitter AST.
+"""
 import sys
 import os
 from pathlib import Path
+from typing import Optional
 
 # Add backend directory to sys.path
 CURRENT_DIR = Path(__file__).resolve().parent
@@ -19,7 +30,11 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 chroma_client = chromadb.PersistentClient(path=str(DATA_DIR))
 code_collection = chroma_client.get_or_create_collection(name="codebase_chunks")
 
+
+# ─── AST Chunking ─────────────────────────────────────────────────────────────
+
 def chunk_file_with_treesitter(file_path: str) -> list:
+    """Parse a Python file with Tree-sitter and return a list of chunk dicts."""
     if not os.path.exists(file_path):
         return []
 
@@ -28,7 +43,7 @@ def chunk_file_with_treesitter(file_path: str) -> list:
 
     chunks = []
     lines = content.splitlines()
-    
+
     try:
         parsed = tslp.process(content, "python")
         structure = parsed.get("structure", [])
@@ -43,10 +58,10 @@ def chunk_file_with_treesitter(file_path: str) -> list:
             chunk_code = "\n".join(lines[start_line:end_line])
 
             chunks.append({
-                "id": f"{os.path.basename(file_path)}::{sym_name}",
-                "symbol": sym_name,
-                "file": file_path,
-                "content": f"# File: {os.path.basename(file_path)} | Symbol: {sym_name}\n{chunk_code}"
+                "id":      f"{os.path.basename(file_path)}::{sym_name}",
+                "symbol":  sym_name,
+                "file":    file_path,
+                "content": f"# File: {os.path.basename(file_path)} | Symbol: {sym_name}\n{chunk_code}",
             })
 
     except Exception as e:
@@ -55,7 +70,18 @@ def chunk_file_with_treesitter(file_path: str) -> list:
 
     return chunks
 
-def index_codebase_rag(target_dir: str):
+
+# ─── Indexing ─────────────────────────────────────────────────────────────────
+
+def index_codebase_rag(target_dir: str, run_id: Optional[str] = None) -> None:
+    """
+    Walk target_dir and upsert all Python AST chunks into ChromaDB.
+
+    Args:
+        target_dir: Root directory to crawl for .py files.
+        run_id:     Optional pipeline run identifier — stored as metadata
+                    on each chunk for traceability.
+    """
     clean_dir = Path(target_dir).resolve()
     if not clean_dir.exists():
         print(f"Directory not found: {target_dir}")
@@ -72,8 +98,15 @@ def index_codebase_rag(target_dir: str):
                 file_chunks = chunk_file_with_treesitter(full_path)
 
                 for chunk in file_chunks:
+                    meta = {
+                        "file":   os.path.basename(full_path),
+                        "symbol": chunk.get("symbol", "file"),
+                    }
+                    if run_id:
+                        meta["run_id"] = run_id
+
                     documents.append(chunk["content"])
-                    metadatas.append({"file": os.path.basename(full_path), "symbol": chunk.get("symbol", "file")})
+                    metadatas.append(meta)
                     ids.append(chunk["id"])
 
     if documents:
@@ -81,41 +114,61 @@ def index_codebase_rag(target_dir: str):
             code_collection.upsert(
                 documents=documents,
                 metadatas=metadatas,
-                ids=ids
+                ids=ids,
             )
-            print(f"🌲 [Tree-sitter RAG]: Indexed {len(documents)} AST chunks across codebase into ChromaDB.")
+            print(
+                f"🌲 [Tree-sitter RAG]: Indexed {len(documents)} AST chunks"
+                f" across codebase into ChromaDB."
+                + (f" (run_id={run_id})" if run_id else "")
+            )
         except Exception as e:
             print(f"⚠️ [Tree-sitter RAG Indexing Error]: {e}")
 
-def retrieve_relevant_code_context(error_log: str, top_k: int = 3) -> str:
+
+# ─── Retrieval (hybrid BM25 + vector) ────────────────────────────────────────
+
+def retrieve_relevant_code_context(
+    error_log: str,
+    top_k: int = 3,
+    run_id: Optional[str] = None,
+) -> str:
+    """
+    Retrieve the most relevant code chunks for the given error log.
+
+    Uses hybrid retrieval: ChromaDB semantic search (top-10 candidates)
+    re-ranked with BM25, returning the top_k results as a prompt-ready string.
+
+    Args:
+        error_log: The test failure log / traceback text to search against.
+        top_k:     Number of chunks to include in the returned context block.
+        run_id:    Optional run context for tagging (passed to rag_api).
+
+    Returns:
+        Formatted multi-line string for LLM prompt inclusion, or "" if no results.
+    """
     if not error_log or code_collection.count() == 0:
         return ""
 
     try:
-        results = code_collection.query(
-            query_texts=[error_log],
-            n_results=min(top_k, code_collection.count())
+        from rag.rag_api import query_rag, format_for_prompt, COLLECTION_CODEBASE
+        results = query_rag(
+            query_text=error_log,
+            top_k=top_k,
+            collection_name=COLLECTION_CODEBASE,
+            run_id=run_id,
+            pre_filter_k=10,
         )
-
-        documents = results.get("documents", [[]])[0]
-        if not documents:
-            return ""
-
-        context_blocks = ["\n🎯 [Codebase RAG - Relevant Code & Test Assertions]:"]
-        for doc in documents:
-            context_blocks.append(f"---\n{doc}")
-
-        return "\n".join(context_blocks) + "\n"
-
+        return format_for_prompt(results, "Codebase RAG — Relevant Code & Test Assertions")
     except Exception as e:
         print(f"⚠️ [RAG Context Retrieval Error]: {e}")
         return ""
 
+
 if __name__ == "__main__":
-    print("Testing Tree-sitter Codebase RAG...")
+    print("Testing Tree-sitter Codebase RAG (hybrid retrieval)...")
     sample_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../target_app"))
-    index_codebase_rag(sample_dir)
-    
+    index_codebase_rag(sample_dir, run_id="test-run-001")
+
     query = "FAILED tests/test_calculator.py::test_negative_values - ValueError: Price cannot be negative"
     retrieved = retrieve_relevant_code_context(query)
     print("\nRetrieved Context:\n", retrieved)
