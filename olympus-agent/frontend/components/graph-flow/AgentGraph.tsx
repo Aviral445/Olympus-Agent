@@ -1,12 +1,15 @@
 "use client";
 
-import React from "react";
+import React, { useRef } from "react";
 import { clsx } from "clsx";
 import {
   CheckCircle2, Circle, Loader2, XCircle,
-  ShieldCheck, GitPullRequest, Code2, Cpu, RefreshCw,
+  ShieldCheck, GitPullRequest, Code2, Cpu, RefreshCw, Globe2,
 } from "lucide-react";
+import { LanguageBadge } from "@/components/ui/LanguageBadge";
 import type { NodeStatus } from "@/lib/types";
+
+// ─── Step definitions ─────────────────────────────────────────────────────────
 
 interface Step {
   id: number;
@@ -17,6 +20,12 @@ interface Step {
 
 const STEPS: Step[] = [
   {
+    id: 0,
+    title: "Language Detection",
+    desc: "Heuristic manifest scan → extension frequency → primary language identified",
+    icon: Globe2,
+  },
+  {
     id: 1,
     title: "RAG Indexing & Patch Agent",
     desc: "Tree-sitter AST chunking → semantic retrieval → LLM patch generation",
@@ -25,7 +34,7 @@ const STEPS: Step[] = [
   {
     id: 2,
     title: "SAST Gate & Sandbox Validation",
-    desc: "Semgrep security scan → Docker pytest isolation → result parsing",
+    desc: "Language-aware Semgrep scan → runner-specific Docker test isolation",
     icon: ShieldCheck,
   },
   {
@@ -42,23 +51,64 @@ const STEPS: Step[] = [
   },
 ];
 
+// ─── Node status helper ───────────────────────────────────────────────────────
+
 function nodeStatus(stepId: number, activeStep: number, failed: boolean): NodeStatus {
   if (stepId < activeStep) return "success";
   if (stepId === activeStep) return failed ? "failed" : "running";
   return "idle";
 }
 
+// ─── Props ────────────────────────────────────────────────────────────────────
+
 interface AgentGraphProps {
+  /** 0 = language detection, 1 = patch, 2 = SAST/sandbox, 3 = git, 4 = PR, 5 = done */
   activeStep: number;
   failed?: boolean;
   retryCount?: number;
+  /** Primary language detected by backend (e.g. "python", "go") */
+  detectedLanguage?: string;
 }
+
+// ─── Component ────────────────────────────────────────────────────────────────
 
 export const AgentGraph: React.FC<AgentGraphProps> = ({
   activeStep,
   failed = false,
   retryCount = 0,
+  detectedLanguage = "",
 }) => {
+  // Per-step start-time tracking for elapsed counters
+  const stepStartTimes = useRef<Record<number, number>>({});
+  const [, forceUpdate] = React.useReducer((x: number) => x + 1, 0);
+
+  // When a step becomes "running", record its start time
+  React.useEffect(() => {
+    if (activeStep >= 0 && activeStep <= 4) {
+      if (!stepStartTimes.current[activeStep]) {
+        stepStartTimes.current[activeStep] = Date.now();
+      }
+    }
+  }, [activeStep]);
+
+  // Tick every second to update elapsed displays
+  React.useEffect(() => {
+    if (activeStep > 0 && activeStep < 5 && !failed) {
+      const id = setInterval(() => forceUpdate(), 1000);
+      return () => clearInterval(id);
+    }
+  }, [activeStep, failed]);
+
+  const elapsedFor = (stepId: number): string => {
+    const start = stepStartTimes.current[stepId];
+    if (!start) return "";
+    const secs = Math.floor((Date.now() - start) / 1000);
+    if (secs < 60) return `${secs}s`;
+    return `${Math.floor(secs / 60)}m${secs % 60}s`;
+  };
+
+  const isPipelineActive = activeStep > 0 && activeStep < 5 && !failed;
+
   return (
     <div
       className="rounded-xl border p-5 shadow-xl"
@@ -66,30 +116,41 @@ export const AgentGraph: React.FC<AgentGraphProps> = ({
     >
       {/* Header */}
       <div className="flex items-center justify-between mb-5">
-        <h2 className="text-sm font-semibold text-slate-300 flex items-center gap-2">
+        <h2 className="text-sm font-semibold flex items-center gap-2" style={{ color: "var(--text-primary)" }}>
           <span className="relative flex h-2 w-2">
-            {activeStep > 0 && activeStep < 5 && !failed && (
+            {isPipelineActive && (
               <>
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500" />
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
               </>
             )}
             {(activeStep === 0 || activeStep >= 5) && !failed && (
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-slate-600" />
+              <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: "var(--border-muted)" }} />
             )}
             {failed && (
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500" />
+              <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: "var(--error)" }} />
             )}
           </span>
           LangGraph Pipeline State
         </h2>
-        {retryCount > 0 && (
-          <span className="flex items-center gap-1.5 text-xs font-mono px-2 py-0.5 rounded-full border"
-            style={{ color: "var(--warning)", borderColor: "rgba(245,158,11,0.3)", background: "var(--warning-glow)" }}>
-            <RefreshCw className="w-3 h-3" />
-            Retry #{retryCount}
-          </span>
-        )}
+
+        <div className="flex items-center gap-2">
+          {/* Language badge — shows once detected */}
+          {detectedLanguage && (
+            <LanguageBadge lang={detectedLanguage} />
+          )}
+          {/* Retry counter */}
+          {retryCount > 0 && (
+            <span
+              className="flex items-center gap-1.5 text-xs font-mono px-2 py-0.5 rounded-full border"
+              style={{ color: "var(--warning)", borderColor: "rgba(200,145,43,0.3)", background: "var(--warning-glow)" }}
+            >
+              <RefreshCw className="w-3 h-3" />
+              Retry #{retryCount}
+            </span>
+          )}
+
+        </div>
       </div>
 
       {/* Steps */}
@@ -98,6 +159,7 @@ export const AgentGraph: React.FC<AgentGraphProps> = ({
           const status = nodeStatus(step.id, activeStep, failed);
           const Icon = step.icon;
           const isLast = idx === STEPS.length - 1;
+          const elapsed = status === "running" || status === "success" ? elapsedFor(step.id) : "";
 
           return (
             <div key={step.id} className="flex gap-3">
@@ -107,27 +169,28 @@ export const AgentGraph: React.FC<AgentGraphProps> = ({
                 <div
                   className={clsx(
                     "w-8 h-8 rounded-full flex items-center justify-center shrink-0 transition-all duration-300",
-                    status === "running" && "animate-pulse-ring ring-2 ring-indigo-500/40",
+                    status === "running" && "animate-pulse-ring ring-2 ring-amber-400/40",
                     status === "success" && "animate-success-ring"
                   )}
                   style={{
                     background:
-                      status === "running" ? "var(--indigo-glow)" :
+                      status === "running" ? "var(--gold-glow)"    :
                       status === "success" ? "var(--success-glow)" :
-                      status === "failed"  ? "var(--error-glow)" :
-                      "rgba(255,255,255,0.03)",
+                      status === "failed"  ? "var(--error-glow)"   :
+                      "rgba(143,162,138,0.08)",
                     border: `1px solid ${
-                      status === "running" ? "rgba(99,102,241,0.5)" :
-                      status === "success" ? "rgba(16,185,129,0.4)" :
-                      status === "failed"  ? "rgba(244,63,94,0.4)" :
-                      "rgba(255,255,255,0.06)"
+                      status === "running" ? "rgba(200,169,107,0.5)" :
+                      status === "success" ? "rgba(90,138,94,0.4)"   :
+                      status === "failed"  ? "rgba(181,90,74,0.4)"   :
+                      "rgba(143,162,138,0.2)"
                     }`,
                   }}
                 >
-                  {status === "running" && <Loader2 className="w-3.5 h-3.5 text-indigo-400 animate-spin" />}
-                  {status === "success" && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
-                  {status === "failed"  && <XCircle className="w-3.5 h-3.5 text-rose-400" />}
-                  {status === "idle"    && <Circle className="w-3.5 h-3.5 text-slate-600" />}
+                  {status === "running" && <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: "var(--gold)" }} />}
+                  {status === "success" && <CheckCircle2 className="w-3.5 h-3.5" style={{ color: "var(--success)" }} />}
+                  {status === "failed"  && <XCircle className="w-3.5 h-3.5" style={{ color: "var(--error)" }} />}
+                  {status === "idle"    && <Circle className="w-3.5 h-3.5" style={{ color: "var(--border-muted)" }} />}
+
                 </div>
                 {/* Vertical connector line */}
                 {!isLast && (
@@ -147,35 +210,58 @@ export const AgentGraph: React.FC<AgentGraphProps> = ({
               <div
                 className={clsx(
                   "flex-1 p-3 rounded-lg border transition-all duration-300 mb-2",
-                  status === "running" && "border-indigo-500/30 bg-indigo-950/20",
-                  status === "success" && "border-emerald-500/20 bg-emerald-950/10",
-                  status === "failed"  && "border-rose-500/30 bg-rose-950/20",
-                  status === "idle"    && "border-transparent bg-white/[0.02]"
+                  status === "running" && "border-amber-400/30 bg-amber-50/40",
+                  status === "success" && "border-green-400/20 bg-green-50/30",
+                  status === "failed"  && "border-red-400/30 bg-red-50/30",
+                  status === "idle"    && "border-transparent"
                 )}
+                style={{
+                  background: status === "idle" ? "rgba(143,162,138,0.05)" : undefined,
+                }}
               >
-                <div className="flex items-center gap-2">
-                  <Icon
-                    className={clsx("w-3.5 h-3.5 shrink-0",
-                      status === "running" ? "text-indigo-400" :
-                      status === "success" ? "text-emerald-400" :
-                      status === "failed"  ? "text-rose-400"   : "text-slate-600"
-                    )}
-                  />
-                  <span
-                    className={clsx("text-xs font-semibold",
-                      status === "running" ? "text-slate-100" :
-                      status === "success" ? "text-slate-300" :
-                      status === "failed"  ? "text-rose-300"  : "text-slate-600"
-                    )}
-                  >
-                    {step.title}
-                  </span>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Icon
+                      className={clsx("w-3.5 h-3.5 shrink-0",
+                        status === "running" ? "text-indigo-400" :
+                        status === "success" ? "text-emerald-400" :
+                        status === "failed"  ? "text-rose-400"   : "text-slate-600"
+                      )}
+                    />
+                    <span
+                      className={clsx("text-xs font-semibold",
+                        status === "running" ? "text-slate-100" :
+                        status === "success" ? "text-slate-300" :
+                        status === "failed"  ? "text-rose-300"  : "text-slate-600"
+                      )}
+                    >
+                      {step.title}
+                    </span>
+                  </div>
+
+                  {/* Elapsed timer */}
+                  {elapsed && (
+                    <span
+                      className="text-[10px] font-mono"
+                      style={{ color: status === "success" ? "var(--success)" : "var(--text-muted)" }}
+                    >
+                      {elapsed}
+                    </span>
+                  )}
                 </div>
+
                 {(status === "running" || status === "failed") && (
                   <p className="text-xs mt-1 ml-5.5"
                     style={{ color: status === "failed" ? "var(--error)" : "var(--text-muted)" }}>
                     {step.desc}
                   </p>
+                )}
+
+                {/* Show language badge inline in the Language Detection step */}
+                {step.id === 0 && status === "success" && detectedLanguage && (
+                  <div className="mt-1 ml-5.5">
+                    <LanguageBadge lang={detectedLanguage} compact />
+                  </div>
                 )}
               </div>
             </div>

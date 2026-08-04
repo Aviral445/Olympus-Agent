@@ -4,12 +4,12 @@ import { clsx } from "clsx";
 type Variant = "pass" | "fail" | "running" | "idle" | "warn" | "info";
 
 const styles: Record<Variant, string> = {
-  pass:    "bg-emerald-950/60 text-emerald-400 border border-emerald-500/30",
-  fail:    "bg-rose-950/60    text-rose-400    border border-rose-500/30",
-  running: "bg-indigo-950/60  text-indigo-300  border border-indigo-500/30",
-  idle:    "bg-slate-900/60   text-slate-400   border border-slate-700/40",
-  warn:    "bg-amber-950/60   text-amber-400   border border-amber-500/30",
-  info:    "bg-sky-950/60     text-sky-400     border border-sky-500/30",
+  pass:    "bg-[#F0F5F1] text-[#4A7C59] border border-[#B5D6BE]",
+  fail:    "bg-[#FDF0EE] text-[#B84A39] border border-[#F0B8B0]",
+  running: "bg-[#EFE9E3] text-[#8A6D47] border border-[#C9B59C]",
+  idle:    "bg-[#EFE9E3] text-[#5C5248] border border-[#D9CFC7]",
+  warn:    "bg-[#FFF8EE] text-[#C48228] border border-[#EACD9B]",
+  info:    "bg-[#F5F2EE] text-[#5C5248] border border-[#D9CFC7]",
 };
 
 interface BadgeProps {

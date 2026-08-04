@@ -1,12 +1,12 @@
 """
 Code RAG — Tree-sitter AST chunker + ChromaDB vector index.
 
-Upgraded from v1:
-  - retrieve_relevant_code_context() now uses hybrid BM25+vector retrieval
-    via rag_api.query_rag() (pre-filter 10 semantic candidates, re-rank top-3).
-  - index_codebase_rag() tags every chunk with the indexing run_id for
-    traceability (metadata field "run_id").
-  - chunk_file_with_treesitter() unchanged — still uses Tree-sitter AST.
+Phase 2 upgrades:
+  - chunk_file_with_treesitter() now detects language from file extension
+    and passes it to tree-sitter-language-pack (40+ languages supported).
+  - index_codebase_rag() walks JS, TS, Go, Java, Rust files in addition to Python.
+  - retrieve_relevant_code_context() still uses hybrid BM25+vector retrieval.
+  - Every chunk tagged with run_id and detected language for traceability.
 """
 import sys
 import os
@@ -30,26 +30,80 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 chroma_client = chromadb.PersistentClient(path=str(DATA_DIR))
 code_collection = chroma_client.get_or_create_collection(name="codebase_chunks")
 
+# ─── Language detection ───────────────────────────────────────────────────────
+
+# File extensions that will be indexed (Python + Phase 2 multi-language)
+INDEXED_EXTENSIONS: set[str] = {
+    ".py",                        # Python
+    ".js", ".mjs", ".cjs",        # JavaScript
+    ".ts", ".tsx", ".jsx",        # TypeScript / JSX
+    ".go",                        # Go
+    ".java",                      # Java
+    ".rs",                        # Rust
+    ".rb",                        # Ruby
+    ".cpp", ".cc", ".c",          # C / C++
+}
+
+# Map from file extension → tree-sitter language name
+_EXT_TO_TS_LANG: dict[str, str] = {
+    ".py":   "python",
+    ".js":   "javascript",
+    ".mjs":  "javascript",
+    ".cjs":  "javascript",
+    ".jsx":  "javascript",
+    ".ts":   "typescript",
+    ".tsx":  "typescript",
+    ".go":   "go",
+    ".java": "java",
+    ".rs":   "rust",
+    ".rb":   "ruby",
+    ".cpp":  "cpp",
+    ".cc":   "cpp",
+    ".c":    "c",
+}
+
+_SKIP_DIRS = {"venv", ".venv", ".git", "__pycache__", "node_modules", ".tox", "dist", "build", "target"}
+
+
+def _detect_ts_language(file_path: str) -> str:
+    """Return the tree-sitter language name for a given file path."""
+    ext = Path(file_path).suffix.lower()
+    return _EXT_TO_TS_LANG.get(ext, "python")
+
 
 # ─── AST Chunking ─────────────────────────────────────────────────────────────
 
 def chunk_file_with_treesitter(file_path: str) -> list:
-    """Parse a Python file with Tree-sitter and return a list of chunk dicts."""
+    """
+    Parse a source file with Tree-sitter and return a list of chunk dicts.
+
+    Phase 2: language is now auto-detected from the file extension instead of
+    being hard-coded to 'python'.  Falls back to whole-file chunking if
+    tree-sitter-language-pack does not have a grammar for the detected language.
+    """
     if not os.path.exists(file_path):
         return []
 
     with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
 
+    lang = _detect_ts_language(file_path)
+    fname = os.path.basename(file_path)
     chunks = []
     lines = content.splitlines()
 
     try:
-        parsed = tslp.process(content, "python")
+        parsed = tslp.process(content, lang)
         structure = parsed.get("structure", [])
 
         if not structure:
-            return [{"id": os.path.basename(file_path), "content": content, "file": file_path}]
+            # tree-sitter returned no structure (empty file or unsupported grammar)
+            return [{
+                "id":      fname,
+                "content": content,
+                "file":    file_path,
+                "lang":    lang,
+            }]
 
         for sym in structure:
             sym_name = sym.get("name", "block")
@@ -58,15 +112,22 @@ def chunk_file_with_treesitter(file_path: str) -> list:
             chunk_code = "\n".join(lines[start_line:end_line])
 
             chunks.append({
-                "id":      f"{os.path.basename(file_path)}::{sym_name}",
+                "id":      f"{fname}::{sym_name}",
                 "symbol":  sym_name,
                 "file":    file_path,
-                "content": f"# File: {os.path.basename(file_path)} | Symbol: {sym_name}\n{chunk_code}",
+                "lang":    lang,
+                "content": f"# File: {fname} | Lang: {lang} | Symbol: {sym_name}\n{chunk_code}",
             })
 
     except Exception as e:
-        print(f"⚠️ [Tree-sitter Chunking Warning]: {e}")
-        chunks.append({"id": os.path.basename(file_path), "content": content, "file": file_path})
+        print(f"⚠️ [Tree-sitter Chunking Warning] ({lang}): {e}")
+        # Graceful degradation: index the whole file as one chunk
+        chunks.append({
+            "id":      fname,
+            "content": content,
+            "file":    file_path,
+            "lang":    lang,
+        })
 
     return chunks
 
@@ -75,10 +136,12 @@ def chunk_file_with_treesitter(file_path: str) -> list:
 
 def index_codebase_rag(target_dir: str, run_id: Optional[str] = None) -> None:
     """
-    Walk target_dir and upsert all Python AST chunks into ChromaDB.
+    Walk target_dir and upsert AST chunks for all supported languages into ChromaDB.
+
+    Phase 2: now indexes Python + JS/TS/Go/Java/Rust/Ruby/C/C++ files.
 
     Args:
-        target_dir: Root directory to crawl for .py files.
+        target_dir: Root directory to crawl for source files.
         run_id:     Optional pipeline run identifier — stored as metadata
                     on each chunk for traceability.
     """
@@ -89,25 +152,36 @@ def index_codebase_rag(target_dir: str, run_id: Optional[str] = None) -> None:
 
     documents = []
     metadatas = []
-    ids = []
+    ids       = []
+    lang_counts: dict[str, int] = {}
 
-    for root, _, files in os.walk(clean_dir):
+    for root, dirs, files in os.walk(clean_dir):
+        # Prune skip dirs in-place so os.walk doesn't descend into them
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+
         for file in files:
-            if file.endswith(".py"):
-                full_path = os.path.join(root, file)
-                file_chunks = chunk_file_with_treesitter(full_path)
+            ext = Path(file).suffix.lower()
+            if ext not in INDEXED_EXTENSIONS:
+                continue
 
-                for chunk in file_chunks:
-                    meta = {
-                        "file":   os.path.basename(full_path),
-                        "symbol": chunk.get("symbol", "file"),
-                    }
-                    if run_id:
-                        meta["run_id"] = run_id
+            full_path = os.path.join(root, file)
+            file_chunks = chunk_file_with_treesitter(full_path)
 
-                    documents.append(chunk["content"])
-                    metadatas.append(meta)
-                    ids.append(chunk["id"])
+            for chunk in file_chunks:
+                lang = chunk.get("lang", "unknown")
+                lang_counts[lang] = lang_counts.get(lang, 0) + 1
+
+                meta: dict = {
+                    "file":   os.path.basename(full_path),
+                    "symbol": chunk.get("symbol", "file"),
+                    "lang":   lang,
+                }
+                if run_id:
+                    meta["run_id"] = run_id
+
+                documents.append(chunk["content"])
+                metadatas.append(meta)
+                ids.append(chunk["id"])
 
     if documents:
         try:
@@ -116,9 +190,10 @@ def index_codebase_rag(target_dir: str, run_id: Optional[str] = None) -> None:
                 metadatas=metadatas,
                 ids=ids,
             )
+            lang_summary = ", ".join(f"{l}={c}" for l, c in sorted(lang_counts.items()))
             print(
-                f"🌲 [Tree-sitter RAG]: Indexed {len(documents)} AST chunks"
-                f" across codebase into ChromaDB."
+                f"🌲 [Tree-sitter RAG]: Indexed {len(documents)} AST chunks "
+                f"[{lang_summary}] into ChromaDB."
                 + (f" (run_id={run_id})" if run_id else "")
             )
         except Exception as e:

@@ -134,13 +134,13 @@ export const LiveHeroAnimation: React.FC = () => {
   const isDone = logIndex >= scenario.logs.length;
 
   return (
-    <div className="relative w-full max-w-5xl mx-auto rounded-2xl border border-[#1e304e] bg-[#0d1b2e]/90 shadow-2xl overflow-hidden backdrop-blur-xl group">
+    <div className="relative w-full max-w-5xl mx-auto rounded-2xl border border-[#D9CFC7] bg-[#2C2621] shadow-xl overflow-hidden backdrop-blur-xl group">
       
       {/* Laser scanner animation line */}
-      <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-indigo-400 to-transparent opacity-70 animate-pulse pointer-events-none z-20" />
+      <div className="absolute top-0 left-0 right-0 h-0.5 bg-gradient-to-r from-transparent via-[#C9B59C] to-transparent opacity-80 animate-pulse pointer-events-none z-20" />
 
       {/* Top Header Controls Bar */}
-      <div className="flex flex-wrap items-center justify-between px-5 py-3.5 bg-[#112240] border-b border-[#162035] gap-3">
+      <div className="flex flex-wrap items-center justify-between px-5 py-3.5 bg-[#1F1A17] border-b border-[#3D352E] gap-3">
         {/* Left window controls + live status */}
         <div className="flex items-center gap-3">
           <div className="flex items-center gap-1.5">
@@ -149,24 +149,24 @@ export const LiveHeroAnimation: React.FC = () => {
             <div className="w-3 h-3 rounded-full bg-emerald-500/80 hover:bg-emerald-500 transition-colors" />
           </div>
 
-          <span className="h-4 w-px bg-slate-700 mx-1" />
+          <span className="h-4 w-px bg-[#4D423B] mx-1" />
 
-          <div className="flex items-center gap-2 font-mono text-xs text-slate-300">
-            <Sparkles className="w-3.5 h-3.5 text-indigo-400 animate-pulse" />
-            <span>Target: <strong className="text-white">{scenario.repo}</strong></span>
+          <div className="flex items-center gap-2 font-mono text-xs text-[#F9F8F6]">
+            <Sparkles className="w-3.5 h-3.5 text-[#C9B59C] animate-pulse" />
+            <span>Target: <strong className="text-[#C9B59C]">{scenario.repo}</strong></span>
           </div>
         </div>
 
         {/* Middle Tab switcher */}
-        <div className="flex items-center bg-[#07111d] p-1 rounded-lg border border-[#162035] text-xs font-mono">
+        <div className="flex items-center bg-[#2C2621] p-1 rounded-lg border border-[#4D423B] text-xs font-mono">
           {(["terminal", "diff", "graph"] as const).map((t) => (
             <button
               key={t}
               onClick={() => setActiveTab(t)}
               className={`px-3 py-1 rounded-md transition-all capitalize ${
                 activeTab === t
-                  ? "bg-indigo-600 text-white font-semibold shadow-sm"
-                  : "text-slate-400 hover:text-slate-200"
+                  ? "bg-[#C9B59C] text-[#1F1A17] font-bold shadow-sm"
+                  : "text-[#A89C90] hover:text-[#F9F8F6]"
               }`}
             >
               {t === "terminal" ? "🖥️ Live Terminal" : t === "diff" ? "📝 Generated Diff" : "🗺️ Pipeline Graph"}
@@ -180,14 +180,16 @@ export const LiveHeroAnimation: React.FC = () => {
             onClick={() => setIsPlaying(!isPlaying)}
             className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono border transition-all"
             style={{
-              borderColor: isPlaying ? "rgba(99,102,241,0.4)" : "rgba(255,255,255,0.1)",
-              background: isPlaying ? "rgba(99,102,241,0.15)" : "transparent",
-              color: isPlaying ? "#818cf8" : "#94a3b8",
+              borderColor: isPlaying ? "#C9B59C" : "rgba(249,248,246,0.2)",
+              background: isPlaying ? "rgba(201,181,156,0.2)" : "transparent",
+              color: isPlaying ? "#C9B59C" : "#F9F8F6",
             }}
           >
             {isPlaying ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
             {isPlaying ? "PAUSE" : "PLAY"}
           </button>
+
+
 
           <button
             onClick={() => {
@@ -205,7 +207,7 @@ export const LiveHeroAnimation: React.FC = () => {
       </div>
 
       {/* ── Step Progress Indicator Bar ── */}
-      <div className="px-5 py-3 bg-[#0d1b2e]/60 border-b border-[#162035] overflow-x-auto">
+      <div className="px-5 py-3 bg-[#1F1A17] border-b border-[#3D352E] overflow-x-auto">
         <div className="flex items-center justify-between gap-2 min-w-[600px]">
           {STEPS.map((s, idx) => {
             const Icon = s.icon;
@@ -218,19 +220,19 @@ export const LiveHeroAnimation: React.FC = () => {
                   <div
                     className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 font-mono transition-all duration-300 ${
                       isActive
-                        ? "bg-indigo-600 text-white ring-4 ring-indigo-500/30 scale-105"
+                        ? "bg-[#C9B59C] text-[#1F1A17] font-bold ring-4 ring-[#C9B59C]/30 scale-105"
                         : isPassed
-                        ? "bg-emerald-950/80 border border-emerald-500/50 text-emerald-400"
-                        : "bg-slate-900 border border-slate-800 text-slate-600"
+                        ? "bg-[#C9B59C]/20 border border-[#C9B59C] text-[#C9B59C]"
+                        : "bg-[#2C2621] border border-[#4D423B] text-[#A89C90]"
                     }`}
                   >
                     {isPassed ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Icon className="w-3.5 h-3.5" />}
                   </div>
                   <div>
-                    <p className={`font-medium transition-colors text-[11px] ${isActive ? "text-white" : isPassed ? "text-slate-300" : "text-slate-500"}`}>
+                    <p className={`font-medium transition-colors text-[11px] ${isActive ? "text-[#F9F8F6]" : isPassed ? "text-[#C9B59C]" : "text-[#A89C90]"}`}>
                       {s.label}
                     </p>
-                    <p className="text-[9px] text-slate-500 font-mono">{s.sub}</p>
+                    <p className="text-[9px] text-[#A89C90] font-mono">{s.sub}</p>
                   </div>
                 </div>
                 {idx < STEPS.length - 1 && (
@@ -238,7 +240,7 @@ export const LiveHeroAnimation: React.FC = () => {
                     className="h-0.5 flex-1 mx-1 rounded-full transition-all duration-500 min-w-[20px]"
                     style={{
                       background: isPassed
-                        ? "linear-gradient(90deg, #10b981, #6366f1)"
+                        ? "linear-gradient(90deg, #C9B59C, #F9F8F6)"
                         : "rgba(255,255,255,0.06)",
                     }}
                   />
@@ -252,8 +254,10 @@ export const LiveHeroAnimation: React.FC = () => {
       {/* ── Content Body (Switchable Tabs) ── */}
       <div
         ref={containerRef}
-        className="p-5 font-mono text-xs min-h-[280px] max-h-[340px] overflow-y-auto bg-[#05080f]"
+        className="p-5 font-mono text-xs min-h-[280px] max-h-[340px] overflow-y-auto bg-[#191512]"
       >
+
+
 
         {/* Tab 1: Terminal Stream */}
         {activeTab === "terminal" && (

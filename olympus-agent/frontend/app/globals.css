@@ -1,40 +1,50 @@
 @import "tailwindcss";
 
-/* ─── Design Tokens ─────────────────────────────────────────────── */
+/* ─── Warm Neutral Palette (#F9F8F6, #EFE9E3, #D9CFC7, #C9B59C) ────────── */
 :root {
-  --bg-base:       #07111d;
-  --bg-surface:    #0d1b2e;
-  --bg-elevated:   #112240;
-  --bg-input:      #0a1628;
+  /* Backgrounds */
+  --bg-base:       #F9F8F6;          /* main page background — off-white     */
+  --bg-surface:    #EFE9E3;          /* card surface — soft sand             */
+  --bg-elevated:   #E5DDD5;          /* headers / elevated panels            */
+  --bg-input:      #FFFDFB;          /* input fields                         */
 
-  --border-subtle: #162035;
-  --border-muted:  #1e304e;
-  --border-active: #4f6ef7;
+  /* Borders */
+  --border-subtle: #E2D9D1;          /* subtle divider                       */
+  --border-muted:  #D9CFC7;          /* muted taupe border                   */
+  --border-active: #C9B59C;          /* primary accent border                */
 
-  --indigo:        #6366f1;
-  --indigo-light:  #818cf8;
-  --indigo-glow:   rgba(99, 102, 241, 0.18);
-  --violet:        #7c3aed;
-  --sky:           #38bdf8;
+  /* Primary Brand Accent — Warm Tan / Gold (#C9B59C) */
+  --gold:          #C9B59C;
+  --gold-light:    #D6C6B0;
+  --gold-glow:     rgba(201, 181, 156, 0.25);
+  --gold-hover:    rgba(201, 181, 156, 0.35);
 
-  --success:       #10b981;
-  --success-glow:  rgba(16, 185, 129, 0.15);
-  --error:         #f43f5e;
-  --error-glow:    rgba(244, 63, 94, 0.15);
-  --warning:       #f59e0b;
-  --warning-glow:  rgba(245, 158, 11, 0.12);
+  /* Secondary Accent — Deeper Warm Taupe */
+  --sage:          #A8947D;
+  --sage-light:    #C9B59C;
+  --sage-muted:    #EFE9E3;
+  --sage-glow:     rgba(168, 148, 125, 0.20);
 
-  --text-primary:  #e8f0fe;
-  --text-secondary:#94a3b8;
-  --text-muted:    #4a5e7a;
+  /* Semantic colors */
+  --success:       #4A7C59;          /* muted forest green                   */
+  --success-glow:  rgba(74, 124, 89, 0.15);
+  --error:         #B84A39;          /* terracotta red                       */
+  --error-glow:    rgba(184, 74, 57, 0.15);
+  --warning:       #C48228;          /* warm amber                           */
+  --warning-glow:  rgba(196, 130, 40, 0.15);
 
-  --sidebar-w:     220px;
-  --radius-sm:     6px;
-  --radius-md:     10px;
-  --radius-lg:     14px;
+  /* Text — deep espresso / charcoal for high readability on #F9F8F6 */
+  --text-primary:  #2C2621;          /* deep espresso                        */
+  --text-secondary:#5C5248;          /* medium warm brown                    */
+  --text-muted:    #8C8075;          /* soft warm gray                       */
+
+  /* Radii */
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  14px;
 }
 
-/* ─── Base ───────────────────────────────────────────────────────── */
+/* ─── Base ────────────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; }
 
 html, body {
@@ -47,18 +57,18 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* ─── Custom Scrollbar ───────────────────────────────────────────── */
-::-webkit-scrollbar { width: 5px; height: 5px; }
+/* ─── Custom Scrollbar ────────────────────────────────────────────────── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
   background: var(--border-muted);
   border-radius: 99px;
 }
-::-webkit-scrollbar-thumb:hover { background: var(--indigo); }
+::-webkit-scrollbar-thumb:hover { background: var(--gold); }
 
-/* ─── Animations ─────────────────────────────────────────────────── */
+/* ─── Animations ──────────────────────────────────────────────────────── */
 @keyframes pulse-ring {
-  0%   { box-shadow: 0 0 0 0 var(--indigo-glow); }
+  0%   { box-shadow: 0 0 0 0 var(--gold-glow); }
   70%  { box-shadow: 0 0 0 8px transparent; }
   100% { box-shadow: 0 0 0 0 transparent; }
 }
@@ -87,18 +97,18 @@ html, body {
 
 @keyframes blink {
   0%, 100% { opacity: 1; }
-  50%       { opacity: 0.2; }
+  50%       { opacity: 0.3; }
 }
 
-/* ─── Utility classes ────────────────────────────────────────────── */
-.animate-slide-in { animation: slide-in 0.25s ease both; }
-.animate-fade-in  { animation: fade-in  0.2s ease both; }
-.animate-pulse-ring { animation: pulse-ring 1.6s ease infinite; }
-.animate-success-ring { animation: success-ring 1.2s ease; }
+/* ─── Utility classes ─────────────────────────────────────────────────── */
+.animate-slide-in    { animation: slide-in 0.25s ease both; }
+.animate-fade-in     { animation: fade-in  0.2s ease both; }
+.animate-pulse-ring  { animation: pulse-ring 1.6s ease infinite; }
+.animate-success-ring{ animation: success-ring 1.2s ease; }
 
-/* Gradient header text */
+/* Gradient header text — Warm Tan → Espresso */
 .gradient-text {
-  background: linear-gradient(135deg, #818cf8 0%, #38bdf8 50%, #10b981 100%);
+  background: linear-gradient(135deg, #B89F7D 0%, #2C2621 50%, #A8947D 100%);
   background-size: 200% 200%;
   -webkit-background-clip: text;
   -webkit-text-fill-color: transparent;
@@ -106,9 +116,9 @@ html, body {
   animation: gradient-shift 6s ease infinite;
 }
 
-/* Glass card */
+/* Glass card — soft warm sand frosted finish */
 .glass {
-  background: rgba(13, 27, 46, 0.7);
+  background: rgba(239, 233, 227, 0.85);
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   border: 1px solid var(--border-muted);
@@ -116,8 +126,8 @@ html, body {
 
 /* Glow border on focus/active */
 .glow-border {
-  border-color: var(--indigo) !important;
-  box-shadow: 0 0 0 3px var(--indigo-glow);
+  border-color: var(--gold) !important;
+  box-shadow: 0 0 0 3px var(--gold-glow);
 }
 
 /* Live blinking dot */
@@ -134,5 +144,5 @@ html, body {
 
 /* Status colours */
 .status-pass { color: var(--success); background: var(--success-glow); }
-.status-fail { color: var(--error);   background: var(--error-glow); }
-.status-run  { color: var(--indigo-light); background: var(--indigo-glow); }
+.status-fail { color: var(--error);   background: var(--error-glow);   }
+.status-run  { color: #8A6D47;        background: var(--gold-glow);    }

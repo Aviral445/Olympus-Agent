@@ -15,3 +15,6 @@ __pycache__/
 
 # Workspace clones (dynamically cloned repos, not tracked)
 **/workspaces/
+
+# Ignored Docs
+ROADMAP.md

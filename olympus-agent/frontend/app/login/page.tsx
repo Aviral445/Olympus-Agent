@@ -97,6 +97,20 @@ export default async function LoginPage({
               <GithubIcon />
               Sign in with GitHub
             </a>
+
+            <div className="relative flex py-2 items-center">
+              <div className="flex-grow border-t border-slate-800"></div>
+              <span className="flex-shrink mx-4 text-[10px] font-mono text-slate-500 uppercase tracking-widest">or</span>
+              <div className="flex-grow border-t border-slate-800"></div>
+            </div>
+
+            <a
+              href="/api/auth/dev-login"
+              className="flex items-center justify-center gap-2 w-full py-3 px-4 rounded-xl font-mono text-xs transition-all duration-200 bg-indigo-600/20 hover:bg-indigo-600/30 text-indigo-300 border border-indigo-500/40 shadow-lg"
+            >
+              ⚡ Quick Dev Bypass (1-Click Login)
+            </a>
+
           </div>
 
           {/* Footer */}

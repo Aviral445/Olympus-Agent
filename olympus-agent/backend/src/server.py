@@ -1,4 +1,5 @@
 import sys
+import io
 import os
 import re
 import uuid
@@ -7,6 +8,13 @@ import asyncio
 import subprocess
 from pathlib import Path
 from typing import Optional
+
+# Force UTF-8 output on Windows for emojis
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+if sys.stderr.encoding and sys.stderr.encoding.lower() != "utf-8":
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -30,6 +38,9 @@ from utils.run_logger import (
     create_run, set_run_context, complete_run,
     get_run_snapshot, is_kafka_enabled,
 )
+from utils.fault_localizer import discover_fault, extract_all_culprits
+from utils.language_detector import detect_repo_language, LANGUAGE_META
+
 
 # ─── App ──────────────────────────────────────────────────────────────────────
 app = FastAPI(title="Project Olympus SRE API", version="2.1.0")
@@ -74,79 +85,74 @@ class RAGQueryRequest(BaseModel):
     collection: str = "codebase_chunks"   # "codebase_chunks" | "patch_experience"
 
 
-# ─── Workspace helpers ────────────────────────────────────────────────────────
+def parse_github_url(url: str) -> tuple[str, str, str]:
+    """
+    Parses any GitHub URL variant into: (clean_repo_url, repo_name, extracted_target_file)
+    Handles:
+      https://github.com/owner/repo/blob/main/path/to/file.py
+      https://github.com/owner/repo/tree/main/src/app.py
+      https://github.com/owner/repo.git
+      https://github.com/owner/repo
+    """
+    if not url or not url.startswith("http"):
+        return url, "", ""
 
-def prepare_workspace(repo_url: str) -> tuple[str, str]:
-    """Clone a remote repository into a local workspace if not already present."""
+    clean = url.rstrip("/").removesuffix(".git")
+    parts = clean.split("/")
+
+    if len(parts) >= 5 and ("github.com" in parts[2] or "www.github.com" in parts[2]):
+        owner = parts[3]
+        repo = parts[4]
+        repo_name = f"{owner}/{repo}"
+        clean_repo_url = f"https://github.com/{owner}/{repo}"
+
+        extracted_file = ""
+        if len(parts) > 6 and parts[5] in ("blob", "tree"):
+            extracted_file = "/".join(parts[7:])
+
+        return clean_repo_url, repo_name, extracted_file
+
+    return url, "", ""
+
+
+def prepare_workspace(raw_repo_url: str) -> tuple[str, str, str]:
+    """Clone or incrementally update a local workspace for a remote repo.
+
+    Supports direct repo URLs and file blob URLs.
+    Returns (workspace_dir, repo_name, extracted_target_file)
+    """
+    repo_url, repo_name, extracted_file = parse_github_url(raw_repo_url)
     if not repo_url or not repo_url.startswith("http"):
-        return "", ""
+        return "", "", ""
 
-    clean_url = repo_url.rstrip("/").removesuffix(".git")
-    parts = clean_url.split("/")
-    repo_name = f"{parts[-2]}/{parts[-1]}" if len(parts) >= 2 else parts[-1]
-    folder_name = parts[-1]
+    folder_name = repo_name.split("/")[-1] if "/" in repo_name else "workspace"
 
     workspace_dir = os.path.abspath(
         os.path.join(os.path.dirname(__file__), f"../workspaces/{folder_name}")
     )
 
     if os.path.exists(workspace_dir):
-        print(f"📂 [Workspace Manager]: Using existing workspace at {workspace_dir}")
+        print(f"📂 [Workspace Manager]: Workspace found at {workspace_dir} — pulling latest changes...")
+        try:
+            repo = Repo(workspace_dir)
+            origin = repo.remotes.origin
+            pull_info = origin.pull()
+            for info in pull_info:
+                print(f"   ↳ {info.ref}: {info.note or 'up to date'}")
+            print("✅ [Workspace Manager]: Workspace is up to date.")
+        except Exception as pull_err:
+            print(f"⚠️ [Workspace Manager]: git pull failed ({pull_err}) — proceeding with cached workspace.")
     else:
         print(f"📥 [Workspace Manager]: Cloning {repo_url} → {workspace_dir}...")
         os.makedirs(os.path.dirname(workspace_dir), exist_ok=True)
         Repo.clone_from(repo_url, workspace_dir)
+        print("✅ [Workspace Manager]: Clone complete.")
 
-    return workspace_dir, repo_name
+    return workspace_dir, repo_name, extracted_file
 
 
-def auto_discover_target_file(workspace_dir: str) -> str:
-    """Run pytest in workspace, parse failure traceback, return the culprit file."""
-    print(f"🔍 [Fault Localizer]: Running automated test discovery in {workspace_dir}...")
-
-    try:
-        result = subprocess.run(
-            [sys.executable, "-m", "pytest"],
-            cwd=workspace_dir,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-        output = result.stdout + "\n" + result.stderr
-        matches = re.findall(r'File\s+"([^"]+\.py)"', output)
-
-        if matches:
-            for file_path in matches:
-                if not os.path.basename(file_path).startswith("test_"):
-                    abs_path = (
-                        os.path.abspath(file_path)
-                        if os.path.isabs(file_path)
-                        else os.path.join(workspace_dir, file_path)
-                    )
-                    if os.path.exists(abs_path):
-                        print(f"🎯 [Fault Localizer]: Culprit file: {abs_path}")
-                        return abs_path
-
-            first_match = matches[0]
-            abs_path = (
-                os.path.abspath(first_match)
-                if os.path.isabs(first_match)
-                else os.path.join(workspace_dir, first_match)
-            )
-            if os.path.exists(abs_path):
-                return abs_path
-
-    except Exception as e:
-        print(f"⚠️ [Fault Localizer]: {e}")
-
-    for root, _, files in os.walk(workspace_dir):
-        for f in files:
-            if f.endswith(".py") and not f.startswith("test_") and f != "setup.py":
-                found_path = os.path.join(root, f)
-                print(f"🎯 [Fault Localizer]: Auto-selected: {found_path}")
-                return found_path
-
-    return ""
+# auto_discover_target_file() has been replaced by the multi-strategy
+# discover_fault() imported from utils.fault_localizer — see that module.
 
 
 # ─── Pipeline runner ──────────────────────────────────────────────────────────
@@ -165,8 +171,17 @@ def run_olympus_pipeline(
     target_repo = repo_name
     workspace_dir = ""
 
+    # Discovered error context from the multi-strategy fault localizer
+    discovered_error_ctx = ""
+    # All culprit files (multi-file patching)
+    target_files: list[str] = []
+
     if repo_url:
-        workspace_dir_result, parsed_repo_name = prepare_workspace(repo_url)
+        workspace_dir_result, parsed_repo_name, extracted_file = prepare_workspace(repo_url)
+        if extracted_file and not target_file:
+            target_file = os.path.normpath(extracted_file)
+
+
         if workspace_dir_result:
             workspace_dir = workspace_dir_result
             if not target_repo:
@@ -175,28 +190,58 @@ def run_olympus_pipeline(
             resolved_target = os.path.join(workspace_dir, target_file) if target_file else ""
             if resolved_target and os.path.exists(resolved_target):
                 active_target = resolved_target
+                # Still run the localizer for error context even if the target file is explicit
+                _, discovered_error_ctx = discover_fault(workspace_dir)
             else:
-                print(f"🔍 Target file not found — switching to Autonomous Fault Localizer...")
-                active_target = auto_discover_target_file(workspace_dir)
+                print("[Fault Localizer]: Target not specified/found — running multi-strategy discovery...")
+                active_target, discovered_error_ctx = discover_fault(workspace_dir)
+
+            # Extract ALL culprit files from the error context for multi-file patching
+            if discovered_error_ctx:
+                target_files = extract_all_culprits(discovered_error_ctx, workspace_dir)
+                if active_target and active_target not in target_files:
+                    target_files.insert(0, active_target)
+
 
     if not active_target:
         active_target = os.path.abspath(
             os.path.join(os.path.dirname(__file__), "../target_app/app.py")
         )
 
-    print(f"⚡ [Olympus Engine]: Initiating fix loop on: {active_target}")
+    if not target_files:
+        target_files = [active_target]
+
+    # ── Language Detection (Phase 2) ──────────────────────────────────────────────────────────────────────────────
+    detected_language = "python"
+    if workspace_dir:
+        detected_language = detect_repo_language(workspace_dir)
+        meta = LANGUAGE_META.get(detected_language, {})
+        print(
+            f"[Language Detector]: Primary language → {detected_language} "
+            f"{meta.get('emoji', '')} | "
+            f"Sandbox runner and SAST ruleset set accordingly."
+        )
+
+
+
+    # Seed the initial test_result with the discovered error context so the
+    # patcher has a meaningful signal even before the first sandbox run.
+    seed_error = discovered_error_ctx or "Initial run required"
 
     initial_state = {
-        "bug_description": "Automated webhook/API trigger",
-        "proposed_fix":    "",
-        "test_result":     "Initial run required",
-        "attempt_count":   0,
-        "max_attempts":    max_attempts,
-        "target_file":     active_target,
-        "workspace_dir":   workspace_dir,
-        "last_diff":       "",
-        "history":         [],
+        "bug_description":   discovered_error_ctx or "Automated webhook/API trigger",
+        "proposed_fix":      "",
+        "test_result":       seed_error,
+        "attempt_count":     0,
+        "max_attempts":      max_attempts,
+        "target_file":       active_target,
+        "target_files":      target_files,
+        "workspace_dir":     workspace_dir,
+        "detected_language": detected_language,
+        "last_diff":         "",
+        "history":           [],
     }
+
 
     final_state = graph_app.invoke(initial_state)
     final_diff = final_state.get("last_diff", "")
@@ -406,4 +451,4 @@ async def github_webhook(request: Request, background_tasks: BackgroundTasks):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("server:app", host="0.0.0.0", port=8000, reload=False)

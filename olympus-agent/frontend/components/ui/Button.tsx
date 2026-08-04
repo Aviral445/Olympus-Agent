@@ -8,25 +8,25 @@ type Size    = "sm" | "md" | "lg";
 
 const variantStyles: Record<Variant, string> = {
   primary: [
-    "bg-indigo-600 hover:bg-indigo-500 active:bg-indigo-700",
-    "text-white shadow-lg shadow-indigo-600/20",
-    "border border-indigo-500/50",
-    "disabled:bg-slate-800 disabled:text-slate-500 disabled:border-slate-700 disabled:shadow-none",
+    "bg-[#C9B59C] hover:bg-[#B8A287] active:bg-[#A89277]",
+    "text-[#1F1A17] font-semibold shadow-md shadow-[#C9B59C]/25",
+    "border border-[#B8A287]",
+    "disabled:bg-[#E5DDD5] disabled:text-[#A89C90] disabled:border-[#D9CFC7] disabled:shadow-none",
   ].join(" "),
   ghost: [
-    "bg-transparent hover:bg-white/5 active:bg-white/10",
-    "text-slate-300 hover:text-slate-100",
-    "border border-slate-700/60 hover:border-slate-600",
+    "bg-[#EFE9E3] hover:bg-[#E5DDD5] active:bg-[#D9CFC7]",
+    "text-[#2C2621] hover:text-[#1F1A17]",
+    "border border-[#D9CFC7] hover:border-[#C9B59C]",
   ].join(" "),
   danger: [
-    "bg-rose-900/40 hover:bg-rose-800/60 active:bg-rose-900/80",
-    "text-rose-400 hover:text-rose-300",
-    "border border-rose-700/50 hover:border-rose-600/70",
+    "bg-[#FDF0EE] hover:bg-[#FBE0DC] active:bg-[#F7CFC8]",
+    "text-[#B84A39] hover:text-[#993728]",
+    "border border-[#F0B8B0]",
   ].join(" "),
   success: [
-    "bg-emerald-900/40 hover:bg-emerald-800/60",
-    "text-emerald-400 hover:text-emerald-300",
-    "border border-emerald-700/50",
+    "bg-[#F0F5F1] hover:bg-[#E1EDE4]",
+    "text-[#4A7C59]",
+    "border border-[#B5D6BE]",
   ].join(" "),
 };
 
@@ -59,7 +59,7 @@ export function Button({
       className={clsx(
         "inline-flex items-center justify-center font-medium rounded-lg",
         "transition-all duration-150 cursor-pointer",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#C9B59C]",
         variantStyles[variant],
         sizeStyles[size],
         className

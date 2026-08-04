@@ -4,25 +4,45 @@ import React, { useState, useRef, useEffect, useCallback } from "react";
 import {
   Play, Square, Terminal, GitBranch, FileCode2,
   Repeat, ScrollText, CheckCircle2, History, Plus,
-  ExternalLink, LogOut, Shield, ChevronRight,
+  ExternalLink, LogOut, Shield, ChevronRight, Trash2, Lock, Unlock,
 } from "lucide-react";
 import { AgentGraph } from "@/components/graph-flow/AgentGraph";
 import { DiffViewer } from "@/components/diff-viewer/DiffViewer";
 import { TelemetryPanel } from "@/components/telemetry/TelemetryPanel";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
+import { LanguageBadge } from "@/components/ui/LanguageBadge";
 import { triggerRun, streamRunLogs, fetchRuns } from "@/lib/api";
 import type { AuthSession, RunRecord, PipelineResult, RunTab } from "@/lib/types";
+
+
+// ─── Types ───────────────────────────────────────────────────────────────────
+
+interface LogEntry {
+  ts: string;   // HH:MM:SS timestamp
+  msg: string;
+}
+
+function nowHMS(): string {
+  const d = new Date();
+  return [
+    String(d.getHours()).padStart(2, "0"),
+    String(d.getMinutes()).padStart(2, "0"),
+    String(d.getSeconds()).padStart(2, "0"),
+  ].join(":");
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function detectStep(msg: string): number | null {
+  if (/\[Language Detector\]/i.test(msg)) return 0;
   if (/Patch Agent|LLM Engine|Generating patch|Tree-sitter RAG/i.test(msg)) return 1;
   if (/SAST Gate|Validation Agent|Docker sandbox|sandbox/i.test(msg)) return 2;
   if (/Git Diff|Committed patch|Attestation|Git Manager/i.test(msg)) return 3;
   if (/Pull Request|PR Delivery|GitHub PR/i.test(msg)) return 4;
   return null;
 }
+
 
 function detectRetry(msg: string): number | null {
   const m = msg.match(/attempt\s+(\d+)\s*\//i);
@@ -36,15 +56,24 @@ function detectLlmTier(msg: string): string | null {
   return null;
 }
 
-function logColor(line: string): string {
-  if (/✅|🎉/.test(line)) return "#6ee7b7";
-  if (/❌|🚨/.test(line)) return "#fca5a5";
-  if (/⚠️/.test(line)) return "#fcd34d";
-  if (/🔍|📝|🌲/.test(line)) return "#7dd3fc";
-  if (/🤖|📡|🧠/.test(line)) return "#c4b5fd";
-  if (/🛡️|🔐/.test(line)) return "#6ee7b7";
-  return "#94a3b8";
+function detectLanguage(msg: string): string | null {
+  // [Language Detector]: Primary language → go 🐹 | ...
+  const m = msg.match(/Primary language\s*[→>]\s*([a-z]+)/i);
+  return m ? m[1].toLowerCase() : null;
 }
+
+
+function logColor(line: string): string {
+  if (/✅|🎉/.test(line)) return "#2E7D32";
+  if (/❌|🚨/.test(line)) return "#C62828";
+  if (/⚠️/.test(line)) return "#E65100";
+  if (/🔍|📝|🌲/.test(line)) return "#00695C";
+  if (/🤖|📡|🧠/.test(line)) return "#1565C0";
+  if (/🛡️|🔐/.test(line)) return "#2E7D32";
+  return "#2B3440";
+}
+
+
 
 // ─── Run History Tab ─────────────────────────────────────────────────────────
 
@@ -78,10 +107,11 @@ function RunHistoryTab() {
             onClick={() => setFilter(f)}
             className="px-3 py-1 rounded-full text-xs font-mono transition-all"
             style={{
-              background: filter === f ? "var(--indigo-glow)" : "transparent",
-              border: `1px solid ${filter === f ? "rgba(99,102,241,0.5)" : "var(--border-muted)"}`,
-              color: filter === f ? "var(--indigo-light)" : "var(--text-muted)",
+              background: filter === f ? "var(--gold-glow)" : "transparent",
+              border: `1px solid ${filter === f ? "rgba(200,169,107,0.5)" : "var(--border-muted)"}`,
+              color: filter === f ? "var(--gold)" : "var(--text-muted)",
             }}
+
           >
             {f}
           </button>
@@ -183,21 +213,36 @@ export default function Dashboard({ session }: DashboardProps) {
   const [pipelineFailed, setPipelineFailed] = useState(false);
   const [prUrl, setPrUrl]               = useState<string | null>(null);
   const [patchDiff, setPatchDiff]       = useState("");
-  const [logs, setLogs]                 = useState<string[]>([]);
+  const [logs, setLogs]                 = useState<LogEntry[]>([]);
   const [runResult, setRunResult]       = useState<PipelineResult>(null);
   const [retryCount, setRetryCount]     = useState(0);
   const [elapsedSecs, setElapsedSecs]   = useState(0);
   const [llmTier, setLlmTier]           = useState("");
   const [activeTab, setActiveTab]       = useState<RunTab>("run");
+  const [detectedLanguage, setDetectedLanguage] = useState("");
+  const [autoScroll, setAutoScroll]     = useState(true);
+
 
   const logEndRef  = useRef<HTMLDivElement>(null);
+  const logBoxRef  = useRef<HTMLDivElement>(null);
   const esRef      = useRef<EventSource | null>(null);
   const timerRef   = useRef<ReturnType<typeof setInterval> | null>(null);
   const startRef   = useRef<number>(0);
 
+  // Auto-scroll: scroll to bottom unless user manually scrolled up
   useEffect(() => {
+    if (!autoScroll) return;
     logEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [logs]);
+  }, [logs, autoScroll]);
+
+  // Detect manual scroll-up to disable auto-scroll
+  const handleLogScroll = useCallback(() => {
+    const box = logBoxRef.current;
+    if (!box) return;
+    const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+    setAutoScroll(atBottom);
+  }, []);
+
 
   useEffect(() => () => { esRef.current?.close(); }, []);
 
@@ -214,7 +259,7 @@ export default function Dashboard({ session }: DashboardProps) {
 
   const handleTrigger = async () => {
     setIsExecuting(true);
-    setCurrentStep(1);
+    setCurrentStep(0);
     setPipelineFailed(false);
     setPrUrl(null);
     setPatchDiff("");
@@ -223,6 +268,8 @@ export default function Dashboard({ session }: DashboardProps) {
     setRetryCount(0);
     setElapsedSecs(0);
     setLlmTier("");
+    setDetectedLanguage("");
+    setAutoScroll(true);
     esRef.current?.close();
     startTimer();
 
@@ -231,13 +278,15 @@ export default function Dashboard({ session }: DashboardProps) {
 
       const es = streamRunLogs(run_id, {
         onLog: (msg) => {
-          setLogs((prev) => [...prev, msg]);
+          setLogs((prev) => [...prev, { ts: nowHMS(), msg }]);
           const step = detectStep(msg);
           if (step !== null) setCurrentStep((p) => Math.max(p, step));
           const retry = detectRetry(msg);
           if (retry !== null) setRetryCount(retry);
           const tier = detectLlmTier(msg);
           if (tier) setLlmTier(tier);
+          const lang = detectLanguage(msg);
+          if (lang) setDetectedLanguage(lang);
         },
         onComplete: (result, diff) => {
           stopTimer();
@@ -254,7 +303,7 @@ export default function Dashboard({ session }: DashboardProps) {
         },
         onError: (msg) => {
           stopTimer();
-          setLogs((prev) => [...prev, `⚠️ ${msg}`]);
+          setLogs((prev) => [...prev, { ts: nowHMS(), msg: `⚠️ ${msg}` }]);
           setIsExecuting(false);
           esRef.current = null;
         },
@@ -263,7 +312,7 @@ export default function Dashboard({ session }: DashboardProps) {
     } catch (err) {
       stopTimer();
       const msg = err instanceof Error ? err.message : "Unknown error";
-      setLogs([`❌ Failed to start pipeline: ${msg}`]);
+      setLogs([{ ts: nowHMS(), msg: `❌ Failed to start pipeline: ${msg}` }]);
       setIsExecuting(false);
       setCurrentStep(0);
     }
@@ -274,8 +323,14 @@ export default function Dashboard({ session }: DashboardProps) {
     esRef.current = null;
     stopTimer();
     setIsExecuting(false);
-    setLogs((p) => [...p, "🛑 Run manually stopped by user."]);
+    setLogs((p) => [...p, { ts: nowHMS(), msg: "🛑 Run manually stopped by user." }]);
   };
+
+  const handleClearLogs = () => {
+    setLogs([]);
+    setAutoScroll(true);
+  };
+
 
   return (
     <div className="flex h-screen overflow-hidden" style={{ background: "var(--bg-base)" }}>
@@ -290,10 +345,11 @@ export default function Dashboard({ session }: DashboardProps) {
           <div className="flex items-center gap-2.5">
             <div
               className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
-              style={{ background: "var(--indigo-glow)", border: "1px solid rgba(99,102,241,0.3)" }}
+              style={{ background: "var(--gold-glow)", border: "1px solid rgba(200,169,107,0.4)" }}
             >
               <span className="text-sm">🏛️</span>
             </div>
+
             <div>
               <p className="text-xs font-bold" style={{ color: "var(--text-primary)" }}>Olympus</p>
               <p className="text-[10px]" style={{ color: "var(--text-muted)" }}>SRE Engine v2.0</p>
@@ -312,15 +368,16 @@ export default function Dashboard({ session }: DashboardProps) {
               onClick={() => setActiveTab(id)}
               className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all text-left"
               style={{
-                background: activeTab === id ? "var(--indigo-glow)" : "transparent",
-                color: activeTab === id ? "var(--indigo-light)" : "var(--text-muted)",
-                border: `1px solid ${activeTab === id ? "rgba(99,102,241,0.3)" : "transparent"}`,
+                background: activeTab === id ? "var(--gold-glow)" : "transparent",
+                color: activeTab === id ? "var(--gold)" : "var(--text-muted)",
+                border: `1px solid ${activeTab === id ? "rgba(200,169,107,0.4)" : "transparent"}`,
               }}
             >
               <Icon className="w-3.5 h-3.5 shrink-0" />
               {label}
             </button>
           ))}
+
         </nav>
 
         {/* User */}
@@ -367,20 +424,23 @@ export default function Dashboard({ session }: DashboardProps) {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {detectedLanguage && <LanguageBadge lang={detectedLanguage} />}
             {isExecuting && <Badge variant="running" pulse>LIVE</Badge>}
             {runResult === "PASS" && <Badge variant="pass">PASSED</Badge>}
             {runResult === "FAIL" && <Badge variant="fail">FAILED</Badge>}
+
             <div
               className="flex items-center gap-1.5 text-xs font-mono px-2.5 py-1 rounded-full"
               style={{
                 background: "var(--success-glow)",
-                border: "1px solid rgba(16,185,129,0.3)",
+                border: "1px solid rgba(90,138,94,0.35)",
                 color: "var(--success)",
               }}
             >
               <CheckCircle2 className="w-3.5 h-3.5" /> System Online
             </div>
           </div>
+
         </header>
 
         {/* Tab Content */}
@@ -403,9 +463,10 @@ export default function Dashboard({ session }: DashboardProps) {
                 >
                   <h2 className="text-xs font-semibold mb-4 flex items-center gap-2"
                     style={{ color: "var(--text-secondary)" }}>
-                    <Terminal className="w-3.5 h-3.5" style={{ color: "var(--indigo-light)" }} />
+                    <Terminal className="w-3.5 h-3.5" style={{ color: "var(--gold)" }} />
                     Control Terminal
                   </h2>
+
 
                   <div className="space-y-3">
                     {/* Repo URL */}
@@ -417,7 +478,8 @@ export default function Dashboard({ session }: DashboardProps) {
                         className="flex items-center gap-2 rounded-lg px-3 py-2"
                         style={{ background: "var(--bg-input)", border: "1px solid var(--border-muted)" }}
                       >
-                        <GitBranch className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--indigo-light)" }} />
+                        <GitBranch className="w-3.5 h-3.5 shrink-0" style={{ color: "var(--gold)" }} />
+
                         <input
                           type="text"
                           value={repoUrl}
@@ -453,23 +515,23 @@ export default function Dashboard({ session }: DashboardProps) {
                     {/* Max attempts */}
                     <div>
                       <div className="flex justify-between items-center mb-1">
-                        <label className="text-[10px] font-mono flex items-center gap-1"
-                          style={{ color: "var(--text-muted)" }}>
-                          <Repeat className="w-3 h-3" style={{ color: "var(--indigo-light)" }} />
-                          Max Repair Attempts
-                        </label>
-                        <span
-                          className="text-[10px] font-mono font-bold px-2 py-0.5 rounded"
-                          style={{ color: "var(--indigo-light)", background: "var(--indigo-glow)" }}
-                        >
-                          {maxAttempts}
-                        </span>
+                          <label className="text-[10px] font-mono flex items-center gap-1"
+                            style={{ color: "var(--text-muted)" }}>
+                            <Repeat className="w-3 h-3" style={{ color: "var(--gold)" }} />
+                            Max Repair Attempts
+                          </label>
+                          <span
+                            className="text-[10px] font-mono font-bold px-2 py-0.5 rounded"
+                            style={{ color: "var(--gold)", background: "var(--gold-glow)" }}
+                          >
+                            {maxAttempts}
+                          </span>
                       </div>
                       <input
                         type="range" min={1} max={200} value={maxAttempts}
                         onChange={(e) => setMaxAttempts(Number(e.target.value))}
                         className="w-full h-1.5 rounded-full cursor-pointer accent-indigo-500"
-                        style={{ accentColor: "var(--indigo)" }}
+                        style={{ accentColor: "var(--gold)" }}
                       />
                     </div>
 
@@ -505,37 +567,77 @@ export default function Dashboard({ session }: DashboardProps) {
                   >
                     <span className="flex items-center gap-2 text-xs font-mono"
                       style={{ color: "var(--text-muted)" }}>
-                      <ScrollText className="w-3.5 h-3.5" style={{ color: "var(--indigo-light)" }} />
+                      <ScrollText className="w-3.5 h-3.5" style={{ color: "var(--gold)" }} />
                       Live Engine Logs
                     </span>
-                    {isExecuting && (
-                      <span className="live-dot text-xs font-mono" style={{ color: "var(--success)" }}>
-                        STREAMING
-                      </span>
-                    )}
+
+                    <div className="flex items-center gap-2">
+                      {isExecuting && (
+                        <span className="live-dot text-xs font-mono" style={{ color: "var(--success)" }}>
+                          STREAMING
+                        </span>
+                      )}
+                      {/* Auto-scroll toggle */}
+                      <button
+                        onClick={() => setAutoScroll((v) => !v)}
+                        title={autoScroll ? "Auto-scroll ON" : "Auto-scroll OFF"}
+                        className="p-1 rounded transition-opacity hover:opacity-80"
+                        style={{ color: autoScroll ? "var(--indigo-light)" : "var(--text-muted)" }}
+                      >
+                        {autoScroll ? <Lock className="w-3 h-3" /> : <Unlock className="w-3 h-3" />}
+                      </button>
+                      {/* Clear button */}
+                      {logs.length > 0 && !isExecuting && (
+                        <button
+                          onClick={handleClearLogs}
+                          title="Clear logs"
+                          className="p-1 rounded transition-opacity hover:opacity-80"
+                          style={{ color: "var(--text-muted)" }}
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      )}
+                    </div>
                   </div>
                   <div
+                    ref={logBoxRef}
+                    onScroll={handleLogScroll}
                     className="flex-1 overflow-y-auto p-3 space-y-0.5 font-mono text-xs"
-                    style={{ background: "#05080f", minHeight: 0 }}
+                    style={{ background: "var(--bg-input)", minHeight: 0 }}
                   >
+
                     {logs.length === 0 ? (
                       <p className="italic" style={{ color: "var(--text-muted)" }}>
                         Logs will appear here once the pipeline starts…
                       </p>
                     ) : (
-                      logs.map((line, i) => (
+                      logs.map((entry, i) => (
                         <div
                           key={i}
-                          className="leading-relaxed whitespace-pre-wrap animate-slide-in"
-                          style={{ color: logColor(line) }}
+                          className="flex items-start gap-2 leading-relaxed animate-slide-in"
                         >
-                          {line}
+                          {/* Timestamp gutter */}
+                          <span
+                            className="shrink-0 select-none"
+                            style={{ color: "var(--border-muted)", minWidth: "48px" }}
+                          >
+
+                            {entry.ts}
+                          </span>
+                          {/* Log message */}
+                          <span
+                            className="whitespace-pre-wrap"
+                            style={{ color: logColor(entry.msg) }}
+                          >
+                            {entry.msg}
+                          </span>
                         </div>
                       ))
                     )}
                     <div ref={logEndRef} />
                   </div>
                 </div>
+
               </div>
 
               {/* Right column — Graph + Diff + Telemetry */}
@@ -544,7 +646,9 @@ export default function Dashboard({ session }: DashboardProps) {
                   activeStep={currentStep}
                   failed={pipelineFailed}
                   retryCount={retryCount}
+                  detectedLanguage={detectedLanguage}
                 />
+
 
                 <TelemetryPanel
                   isRunning={isExecuting}

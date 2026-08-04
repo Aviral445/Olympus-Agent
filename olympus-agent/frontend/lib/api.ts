@@ -44,9 +44,13 @@ export function streamRunLogs(runId: string, callbacks: StreamCallbacks): EventS
   };
 
   es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) {
+      return;
+    }
     callbacks.onError("SSE connection lost — check backend is running.");
     es.close();
   };
+
 
   return es;
 }
