@@ -3,9 +3,9 @@
 import React, { useState } from "react";
 import {
   Cpu, Zap, ShieldCheck, GitPullRequest, CheckCircle2,
-  Terminal, Layers, Code2, Lock, ArrowRight, Activity, Sparkles,
-  FileCode2, Server, Database, Check, AlertTriangle, Shield
+  Sparkles, FileCode2
 } from "lucide-react";
+
 
 interface StepDetail {
   id: string;

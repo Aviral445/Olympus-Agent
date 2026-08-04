@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { buildGithubOAuthUrl } from "@/lib/auth";
+
 
 // GitHub SVG Icon
 function GithubIcon() {
@@ -123,13 +125,14 @@ export default async function LoginPage({
 
         {/* Return to home link */}
         <div className="text-center mt-6">
-          <a
+          <Link
             href="/"
             className="text-xs font-mono text-slate-400 hover:text-indigo-400 transition-colors"
           >
             ← Back to Product Overview
-          </a>
+          </Link>
         </div>
+
       </div>
     </div>
   );

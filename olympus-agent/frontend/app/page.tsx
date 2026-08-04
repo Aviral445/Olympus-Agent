@@ -3,11 +3,11 @@ import { getSession } from "@/lib/auth";
 import { LiveHeroAnimation } from "@/components/landing/LiveHeroAnimation";
 import { HowItWorksDeepDive } from "@/components/landing/HowItWorksDeepDive";
 import {
-  ShieldCheck, Cpu, GitPullRequest, Code2, Terminal,
+  ShieldCheck, Code2, Terminal,
   Zap, RefreshCw, CheckCircle2, Lock, ArrowRight, Play,
-  Layers, FileCode, Check, ExternalLink, Activity, Sparkles,
-  Globe2, Boxes, Server, Flame, Box
+  FileCode, ExternalLink, Sparkles, Globe2
 } from "lucide-react";
+
 
 export default async function HomePage() {
   const session = await getSession();

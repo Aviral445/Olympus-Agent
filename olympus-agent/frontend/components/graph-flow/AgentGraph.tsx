@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useRef } from "react";
+import React from "react";
 import { clsx } from "clsx";
 import {
   CheckCircle2, Circle, Loader2, XCircle,
@@ -78,34 +78,35 @@ export const AgentGraph: React.FC<AgentGraphProps> = ({
   retryCount = 0,
   detectedLanguage = "",
 }) => {
-  // Per-step start-time tracking for elapsed counters
-  const stepStartTimes = useRef<Record<number, number>>({});
-  const [, forceUpdate] = React.useReducer((x: number) => x + 1, 0);
+  const startTimesRef = React.useRef<Record<number, number>>({});
+  const [elapsedDisplay, setElapsedDisplay] = React.useState<Record<number, string>>({});
 
-  // When a step becomes "running", record its start time
+  // When a step becomes active, record start timestamp in ref
   React.useEffect(() => {
-    if (activeStep >= 0 && activeStep <= 4) {
-      if (!stepStartTimes.current[activeStep]) {
-        stepStartTimes.current[activeStep] = Date.now();
-      }
+    if (activeStep >= 0 && activeStep <= 4 && !startTimesRef.current[activeStep]) {
+      startTimesRef.current[activeStep] = Date.now();
     }
   }, [activeStep]);
 
-  // Tick every second to update elapsed displays
+  // Tick every second to update elapsed display state
   React.useEffect(() => {
     if (activeStep > 0 && activeStep < 5 && !failed) {
-      const id = setInterval(() => forceUpdate(), 1000);
+      const updateElapsed = () => {
+        const now = Date.now();
+        const next: Record<number, string> = {};
+        for (const [stepIdStr, start] of Object.entries(startTimesRef.current)) {
+          const stepId = Number(stepIdStr);
+          const secs = Math.floor((now - start) / 1000);
+          next[stepId] = secs < 60 ? `${secs}s` : `${Math.floor(secs / 60)}m${secs % 60}s`;
+        }
+        setElapsedDisplay(next);
+      };
+
+      updateElapsed();
+      const id = setInterval(updateElapsed, 1000);
       return () => clearInterval(id);
     }
   }, [activeStep, failed]);
-
-  const elapsedFor = (stepId: number): string => {
-    const start = stepStartTimes.current[stepId];
-    if (!start) return "";
-    const secs = Math.floor((Date.now() - start) / 1000);
-    if (secs < 60) return `${secs}s`;
-    return `${Math.floor(secs / 60)}m${secs % 60}s`;
-  };
 
   const isPipelineActive = activeStep > 0 && activeStep < 5 && !failed;
 
@@ -149,7 +150,6 @@ export const AgentGraph: React.FC<AgentGraphProps> = ({
               Retry #{retryCount}
             </span>
           )}
-
         </div>
       </div>
 
@@ -159,110 +159,71 @@ export const AgentGraph: React.FC<AgentGraphProps> = ({
           const status = nodeStatus(step.id, activeStep, failed);
           const Icon = step.icon;
           const isLast = idx === STEPS.length - 1;
-          const elapsed = status === "running" || status === "success" ? elapsedFor(step.id) : "";
+          const elapsed = status === "running" || status === "success" ? (elapsedDisplay[step.id] ?? "") : "";
 
           return (
             <div key={step.id} className="flex gap-3">
-              {/* Connector column */}
-              <div className="flex flex-col items-center w-8 shrink-0">
-                {/* Node dot */}
+              {/* Left timeline indicator */}
+              <div className="flex flex-col items-center">
                 <div
                   className={clsx(
-                    "w-8 h-8 rounded-full flex items-center justify-center shrink-0 transition-all duration-300",
-                    status === "running" && "animate-pulse-ring ring-2 ring-amber-400/40",
-                    status === "success" && "animate-success-ring"
+                    "w-7 h-7 rounded-full flex items-center justify-center shrink-0 transition-all duration-300",
+                    status === "success" && "bg-emerald-500/20 text-emerald-400 border border-emerald-500/40",
+                    status === "running" && "bg-amber-500/20 text-amber-400 border border-amber-500/40 animate-pulse-ring",
+                    status === "failed"  && "bg-red-500/20 text-red-400 border border-red-500/40",
+                    status === "idle"    && "bg-slate-800/50 text-slate-500 border border-slate-700/50"
                   )}
-                  style={{
-                    background:
-                      status === "running" ? "var(--gold-glow)"    :
-                      status === "success" ? "var(--success-glow)" :
-                      status === "failed"  ? "var(--error-glow)"   :
-                      "rgba(143,162,138,0.08)",
-                    border: `1px solid ${
-                      status === "running" ? "rgba(200,169,107,0.5)" :
-                      status === "success" ? "rgba(90,138,94,0.4)"   :
-                      status === "failed"  ? "rgba(181,90,74,0.4)"   :
-                      "rgba(143,162,138,0.2)"
-                    }`,
-                  }}
                 >
-                  {status === "running" && <Loader2 className="w-3.5 h-3.5 animate-spin" style={{ color: "var(--gold)" }} />}
-                  {status === "success" && <CheckCircle2 className="w-3.5 h-3.5" style={{ color: "var(--success)" }} />}
-                  {status === "failed"  && <XCircle className="w-3.5 h-3.5" style={{ color: "var(--error)" }} />}
-                  {status === "idle"    && <Circle className="w-3.5 h-3.5" style={{ color: "var(--border-muted)" }} />}
-
+                  {status === "success" && <CheckCircle2 className="w-4 h-4 text-emerald-400" />}
+                  {status === "running" && <Loader2 className="w-4 h-4 text-amber-400 animate-spin" />}
+                  {status === "failed"  && <XCircle className="w-4 h-4 text-red-400" />}
+                  {status === "idle"    && <Circle className="w-3 h-3 text-slate-600" />}
                 </div>
-                {/* Vertical connector line */}
+
                 {!isLast && (
                   <div
-                    className="w-px flex-1 mt-1 transition-all duration-500"
-                    style={{
-                      background: status === "success"
-                        ? "linear-gradient(to bottom, rgba(16,185,129,0.5), rgba(16,185,129,0.1))"
-                        : "rgba(255,255,255,0.05)",
-                      minHeight: "12px",
-                    }}
+                    className={clsx(
+                      "w-0.5 flex-1 my-1 transition-colors duration-300",
+                      step.id < activeStep ? "bg-emerald-500/40" : "bg-slate-800"
+                    )}
+                    style={{ minHeight: "16px" }}
                   />
                 )}
               </div>
 
-              {/* Content */}
-              <div
-                className={clsx(
-                  "flex-1 p-3 rounded-lg border transition-all duration-300 mb-2",
-                  status === "running" && "border-amber-400/30 bg-amber-50/40",
-                  status === "success" && "border-green-400/20 bg-green-50/30",
-                  status === "failed"  && "border-red-400/30 bg-red-50/30",
-                  status === "idle"    && "border-transparent"
-                )}
-                style={{
-                  background: status === "idle" ? "rgba(143,162,138,0.05)" : undefined,
-                }}
-              >
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Icon
-                      className={clsx("w-3.5 h-3.5 shrink-0",
-                        status === "running" ? "text-indigo-400" :
-                        status === "success" ? "text-emerald-400" :
-                        status === "failed"  ? "text-rose-400"   : "text-slate-600"
-                      )}
-                    />
-                    <span
-                      className={clsx("text-xs font-semibold",
-                        status === "running" ? "text-slate-100" :
-                        status === "success" ? "text-slate-300" :
-                        status === "failed"  ? "text-rose-300"  : "text-slate-600"
-                      )}
-                    >
-                      {step.title}
-                    </span>
+              {/* Right step details */}
+              <div className="pb-3 min-w-0 flex-1">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2 font-mono text-xs font-semibold" style={{ color: "var(--text-primary)" }}>
+                    <Icon className="w-3.5 h-3.5 shrink-0 text-slate-400" />
+                    <span>{step.title}</span>
                   </div>
 
-                  {/* Elapsed timer */}
-                  {elapsed && (
+                  <div className="flex items-center gap-2">
+                    {/* Elapsed time badge */}
+                    {elapsed && (
+                      <span className="font-mono text-[10px] text-slate-400 px-1.5 py-0.5 rounded bg-slate-800/80 border border-slate-700/50">
+                        ⏱ {elapsed}
+                      </span>
+                    )}
+
                     <span
-                      className="text-[10px] font-mono"
-                      style={{ color: status === "success" ? "var(--success)" : "var(--text-muted)" }}
+                      className={clsx(
+                        "font-mono text-[10px] uppercase px-2 py-0.5 rounded-full font-semibold border",
+                        status === "success" && "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
+                        status === "running" && "bg-amber-500/10 text-amber-400 border-amber-500/30",
+                        status === "failed"  && "bg-red-500/10 text-red-400 border-red-500/30",
+                        status === "idle"    && "bg-slate-800/40 text-slate-500 border-slate-700/30"
+                      )}
                     >
-                      {elapsed}
+                      {status}
                     </span>
-                  )}
+                  </div>
                 </div>
 
-                {(status === "running" || status === "failed") && (
-                  <p className="text-xs mt-1 ml-5.5"
-                    style={{ color: status === "failed" ? "var(--error)" : "var(--text-muted)" }}>
-                    {step.desc}
-                  </p>
-                )}
-
-                {/* Show language badge inline in the Language Detection step */}
-                {step.id === 0 && status === "success" && detectedLanguage && (
-                  <div className="mt-1 ml-5.5">
-                    <LanguageBadge lang={detectedLanguage} compact />
-                  </div>
-                )}
+                <p className="text-xs mt-0.5 leading-relaxed" style={{ color: "var(--text-muted)" }}>
+                  {step.desc}
+                </p>
               </div>
             </div>
           );
