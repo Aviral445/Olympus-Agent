@@ -1,19 +1,21 @@
 "use client";
 
 import React, { useState, useRef, useEffect, useCallback } from "react";
+import Image from "next/image";
 import {
   Play, Square, Terminal, GitBranch, FileCode2,
   Repeat, ScrollText, CheckCircle2, History, Plus,
   ExternalLink, LogOut, Shield, ChevronRight, Trash2, Lock, Unlock,
 } from "lucide-react";
 import { AgentGraph } from "@/components/graph-flow/AgentGraph";
+import { DependencyMap } from "@/components/DependencyMap";
 import { DiffViewer } from "@/components/diff-viewer/DiffViewer";
 import { TelemetryPanel } from "@/components/telemetry/TelemetryPanel";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { LanguageBadge } from "@/components/ui/LanguageBadge";
-import { triggerRun, streamRunLogs, fetchRuns } from "@/lib/api";
-import type { AuthSession, RunRecord, PipelineResult, RunTab } from "@/lib/types";
+import { triggerRun, streamRunLogs, fetchRuns, fetchDependencyGraph } from "@/lib/api";
+import type { AuthSession, RunRecord, PipelineResult, RunTab, DependencyGraphData } from "@/lib/types";
 
 
 // ─── Types ───────────────────────────────────────────────────────────────────
@@ -36,7 +38,7 @@ function nowHMS(): string {
 
 function detectStep(msg: string): number | null {
   if (/\[Language Detector\]/i.test(msg)) return 0;
-  if (/Patch Agent|LLM Engine|Generating patch|Tree-sitter RAG/i.test(msg)) return 1;
+  if (/Agent Router|Import Resolver Agent|Type Fix Agent|Logic Repair Agent|Patch Agent|LLM Engine|Tree-sitter RAG/i.test(msg)) return 1;
   if (/SAST Gate|Validation Agent|Docker sandbox|sandbox/i.test(msg)) return 2;
   if (/Git Diff|Committed patch|Attestation|Git Manager/i.test(msg)) return 3;
   if (/Pull Request|PR Delivery|GitHub PR/i.test(msg)) return 4;
@@ -57,20 +59,40 @@ function detectLlmTier(msg: string): string | null {
 }
 
 function detectLanguage(msg: string): string | null {
-  // [Language Detector]: Primary language → go 🐹 | ...
   const m = msg.match(/Primary language\s*[→>]\s*([a-z]+)/i);
   return m ? m[1].toLowerCase() : null;
 }
 
+function detectSpecialist(msg: string): string | null {
+  if (/ImportResolverAgent|\[Import Resolver Agent\]|\[Import Resolver\]/i.test(msg)) return "ImportResolverAgent";
+  if (/TypeFixAgent|\[Type Fix Agent\]|\[Type Fixer\]/i.test(msg)) return "TypeFixAgent";
+  if (/LogicRepairAgent|\[Logic Repair Agent\]|\[Logic Repairer\]/i.test(msg)) return "LogicRepairAgent";
+  return null;
+}
+
+function detectErrorClass(msg: string): string | null {
+  const m = msg.match(/Classified error as '([^']+)'/i);
+  return m ? m[1] : null;
+}
+
+function detectCulprits(msg: string): string[] | null {
+  const m = msg.match(/Retargeting \d+ file\(s\): \[([^\]]+)\]/i);
+  if (m) {
+    return m[1].split(",").map((s) => s.trim().replace(/['"]/g, ""));
+  }
+  return null;
+}
+
+
 
 function logColor(line: string): string {
-  if (/✅|🎉/.test(line)) return "#2E7D32";
-  if (/❌|🚨/.test(line)) return "#C62828";
-  if (/⚠️/.test(line)) return "#E65100";
-  if (/🔍|📝|🌲/.test(line)) return "#00695C";
-  if (/🤖|📡|🧠/.test(line)) return "#1565C0";
-  if (/🛡️|🔐/.test(line)) return "#2E7D32";
-  return "#2B3440";
+  if (/✅|🎉/.test(line)) return "#34a853";
+  if (/❌|🚨/.test(line)) return "#ea4335";
+  if (/⚠️/.test(line)) return "#fbbc04";
+  if (/🔍|📝|🌲/.test(line)) return "#26a69a";
+  if (/🤖|📡|🧠/.test(line)) return "#5c85d6";
+  if (/🛡️|🔐/.test(line)) return "#57bb8a";
+  return "var(--text-secondary)";
 }
 
 
@@ -220,7 +242,11 @@ export default function Dashboard({ session }: DashboardProps) {
   const [llmTier, setLlmTier]           = useState("");
   const [activeTab, setActiveTab]       = useState<RunTab>("run");
   const [detectedLanguage, setDetectedLanguage] = useState("");
-  const [autoScroll, setAutoScroll]     = useState(true);
+  const [agentUsed, setAgentUsed]               = useState("");
+  const [errorClass, setErrorClass]             = useState("");
+  const [culpritFiles, setCulpritFiles]         = useState<string[]>([]);
+  const [graphData, setGraphData]               = useState<DependencyGraphData>({ nodes: [], edges: [] });
+  const [autoScroll, setAutoScroll]             = useState(true);
 
 
   const logEndRef  = useRef<HTMLDivElement>(null);
@@ -269,12 +295,21 @@ export default function Dashboard({ session }: DashboardProps) {
     setElapsedSecs(0);
     setLlmTier("");
     setDetectedLanguage("");
+    setAgentUsed("");
+    setErrorClass("");
+    setCulpritFiles([]);
+    setGraphData({ nodes: [], edges: [] });
     setAutoScroll(true);
     esRef.current?.close();
     startTimer();
 
     try {
       const { run_id } = await triggerRun({ repo_url: repoUrl, target_file: targetFile, max_attempts: maxAttempts });
+
+      // Fetch initial or workspace dependency graph
+      fetchDependencyGraph(run_id).then((g) => {
+        if (g && g.nodes && g.nodes.length > 0) setGraphData(g);
+      });
 
       const es = streamRunLogs(run_id, {
         onLog: (msg) => {
@@ -287,11 +322,26 @@ export default function Dashboard({ session }: DashboardProps) {
           if (tier) setLlmTier(tier);
           const lang = detectLanguage(msg);
           if (lang) setDetectedLanguage(lang);
+
+          const spec = detectSpecialist(msg);
+          if (spec) setAgentUsed(spec);
+          const errCls = detectErrorClass(msg);
+          if (errCls) setErrorClass(errCls);
+          const culprits = detectCulprits(msg);
+          if (culprits) setCulpritFiles(culprits);
+
+          // Re-fetch graph on step changes or log messages
+          if (/Dependency Graph|Import Graph/i.test(msg)) {
+            fetchDependencyGraph(run_id).then((g) => {
+              if (g && g.nodes && g.nodes.length > 0) setGraphData(g);
+            });
+          }
         },
+
         onComplete: (result, diff) => {
           stopTimer();
           setRunResult(result);
-          setCurrentStep(result === "PASS" ? 5 : currentStep);
+          setCurrentStep((prev) => result === "PASS" ? 5 : prev);
           setPipelineFailed(result === "FAIL");
           if (result === "PASS") {
             setPatchDiff(diff);
@@ -343,11 +393,10 @@ export default function Dashboard({ session }: DashboardProps) {
         {/* Logo */}
         <div className="px-4 py-5 border-b" style={{ borderColor: "var(--border-subtle)" }}>
           <div className="flex items-center gap-2.5">
-            <div
-              className="w-8 h-8 rounded-lg flex items-center justify-center shrink-0"
+            <div className="w-8 h-8 rounded-lg overflow-hidden flex items-center justify-center shrink-0"
               style={{ background: "var(--gold-glow)", border: "1px solid rgba(200,169,107,0.4)" }}
             >
-              <span className="text-sm">🏛️</span>
+              <Image src="/olympus-logo.png" alt="Olympus" width={32} height={32} className="object-contain" />
             </div>
 
             <div>
@@ -640,15 +689,23 @@ export default function Dashboard({ session }: DashboardProps) {
 
               </div>
 
-              {/* Right column — Graph + Diff + Telemetry */}
+              {/* Right column — Graph + Dependency Map + Diff + Telemetry */}
               <div className="flex-1 flex flex-col gap-4 overflow-y-auto min-w-0">
                 <AgentGraph
                   activeStep={currentStep}
                   failed={pipelineFailed}
                   retryCount={retryCount}
                   detectedLanguage={detectedLanguage}
+                  agentUsed={agentUsed}
+                  errorClass={errorClass}
                 />
 
+                <DependencyMap
+                  graphData={graphData}
+                  errorFile={targetFile}
+                  culpritFiles={culpritFiles}
+                  activeSpecialist={agentUsed}
+                />
 
                 <TelemetryPanel
                   isRunning={isExecuting}
@@ -661,6 +718,7 @@ export default function Dashboard({ session }: DashboardProps) {
                 />
 
                 <DiffViewer diffText={patchDiff} />
+
 
                 {/* PR Success */}
                 {prUrl && runResult === "PASS" && (

@@ -2,9 +2,10 @@
 
 import React from "react";
 import { clsx } from "clsx";
+
 import {
   CheckCircle2, Circle, Loader2, XCircle,
-  ShieldCheck, GitPullRequest, Code2, Cpu, RefreshCw, Globe2,
+  ShieldCheck, GitPullRequest, Code2, Cpu, RefreshCw, Globe2, GitFork, Wrench,
 } from "lucide-react";
 import { LanguageBadge } from "@/components/ui/LanguageBadge";
 import type { NodeStatus } from "@/lib/types";
@@ -27,9 +28,9 @@ const STEPS: Step[] = [
   },
   {
     id: 1,
-    title: "RAG Indexing & Patch Agent",
-    desc: "Tree-sitter AST chunking → semantic retrieval → LLM patch generation",
-    icon: Cpu,
+    title: "Agent Router & Specialist Dispatch",
+    desc: "Traceback classification → AgentRouter node → Import / Type / Logic specialist dispatch",
+    icon: GitFork,
   },
   {
     id: 2,
@@ -40,7 +41,7 @@ const STEPS: Step[] = [
   {
     id: 3,
     title: "Git Manager & Sigstore Attestation",
-    desc: "Branch creation → commit → cryptographic diff signing",
+    desc: "Atomic multi-file branch creation → batch commit → cryptographic diff signing",
     icon: Code2,
   },
   {
@@ -62,12 +63,16 @@ function nodeStatus(stepId: number, activeStep: number, failed: boolean): NodeSt
 // ─── Props ────────────────────────────────────────────────────────────────────
 
 interface AgentGraphProps {
-  /** 0 = language detection, 1 = patch, 2 = SAST/sandbox, 3 = git, 4 = PR, 5 = done */
+  /** 0 = language detection, 1 = router/specialist, 2 = SAST/sandbox, 3 = git, 4 = PR, 5 = done */
   activeStep: number;
   failed?: boolean;
   retryCount?: number;
   /** Primary language detected by backend (e.g. "python", "go") */
   detectedLanguage?: string;
+  /** Active specialist sub-agent (ImportResolverAgent, TypeFixAgent, LogicRepairAgent) */
+  agentUsed?: string;
+  /** Classified error class (ImportError, TypeError, LogicError) */
+  errorClass?: string;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -77,6 +82,8 @@ export const AgentGraph: React.FC<AgentGraphProps> = ({
   failed = false,
   retryCount = 0,
   detectedLanguage = "",
+  agentUsed = "",
+  errorClass = "",
 }) => {
   const startTimesRef = React.useRef<Record<number, number>>({});
   const [elapsedDisplay, setElapsedDisplay] = React.useState<Record<number, string>>({});
@@ -132,14 +139,28 @@ export const AgentGraph: React.FC<AgentGraphProps> = ({
               <span className="relative inline-flex rounded-full h-2 w-2" style={{ background: "var(--error)" }} />
             )}
           </span>
-          LangGraph Pipeline State
+          LangGraph Pipeline State (Phase 3 Multi-Agent)
         </h2>
 
         <div className="flex items-center gap-2">
-          {/* Language badge — shows once detected */}
+          {/* Agent Specialist Badge */}
+          {agentUsed && (
+            <span className={clsx(
+              "text-[10px] font-mono px-2 py-0.5 rounded-full font-semibold border flex items-center gap-1",
+              agentUsed === "ImportResolverAgent" && "bg-cyan-500/10 text-cyan-400 border-cyan-500/30",
+              agentUsed === "TypeFixAgent"        && "bg-purple-500/10 text-purple-400 border-purple-500/30",
+              agentUsed === "LogicRepairAgent"   && "bg-amber-500/10 text-amber-400 border-amber-500/30"
+            )}>
+              <Wrench className="w-3 h-3" />
+              {agentUsed}
+            </span>
+          )}
+
+          {/* Language badge */}
           {detectedLanguage && (
             <LanguageBadge lang={detectedLanguage} />
           )}
+
           {/* Retry counter */}
           {retryCount > 0 && (
             <span
@@ -200,6 +221,13 @@ export const AgentGraph: React.FC<AgentGraphProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
+                    {/* Step 1 custom badge: Error class & Specialist */}
+                    {step.id === 1 && errorClass && (
+                      <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700">
+                        {errorClass}
+                      </span>
+                    )}
+
                     {/* Elapsed time badge */}
                     {elapsed && (
                       <span className="font-mono text-[10px] text-slate-400 px-1.5 py-0.5 rounded bg-slate-800/80 border border-slate-700/50">

@@ -47,3 +47,20 @@ export interface HealthResponse {
 export type PipelineResult = "PASS" | "FAIL" | null;
 export type RunTab = "run" | "history";
 export type NodeStatus = "idle" | "running" | "success" | "failed";
+
+export interface GraphNode {
+  id: string;
+  file: string;
+  status?: "error_origin" | "caller" | "dependency" | "normal";
+}
+
+export interface GraphEdge {
+  source: string;
+  target: string;
+}
+
+export interface DependencyGraphData {
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+

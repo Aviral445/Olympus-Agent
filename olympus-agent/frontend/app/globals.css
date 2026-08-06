@@ -38,6 +38,9 @@
   --text-secondary:#5C5248;          /* medium warm brown                    */
   --text-muted:    #8C8075;          /* soft warm gray                       */
 
+  /* Accent — Indigo (used for links and interactive highlights) */
+  --indigo-light: #6366f1;
+
   /* Radii */
   --radius-sm:  6px;
   --radius-md:  10px;

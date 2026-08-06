@@ -39,3 +39,25 @@ def commit_patch(target_file, attempt_num):
     msg = f"fix(olympus): autonomous patch attempt #{attempt_num} for {os.path.basename(target_file)}"
     run_git_cmd(["commit", "-m", msg])
     print(f"📦 [Git Manager]: Committed patch #{attempt_num} locally.")
+
+def commit_patch_batch(file_paths: list[str], attempt_num: int):
+    """Stages and commits multiple files atomically in a single git commit."""
+    valid_paths = [f for f in file_paths if os.path.exists(f)]
+    if not valid_paths:
+        return ""
+    for path in valid_paths:
+        run_git_cmd(["add", path])
+    file_names = ", ".join(os.path.basename(f) for f in valid_paths)
+    msg = f"fix(olympus): atomic multi-file patch attempt #{attempt_num} for {len(valid_paths)} file(s) [{file_names}]"
+    run_git_cmd(["commit", "-m", msg])
+    print(f"📦 [Git Manager]: Committed atomic batch patch #{attempt_num} for {len(valid_paths)} file(s) locally.")
+    return msg
+
+def generate_multi_file_diff(file_paths: list[str]) -> str:
+    """Generates a combined unified diff across all patched files."""
+    diffs = []
+    for f in file_paths:
+        file_diff = generate_patch_diff(f)
+        if file_diff:
+            diffs.append(f"# --- {os.path.basename(f)} ---\n{file_diff}")
+    return "\n\n".join(diffs)

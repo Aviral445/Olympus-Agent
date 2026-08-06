@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import { getSession } from "@/lib/auth";
 import { LiveHeroAnimation } from "@/components/landing/LiveHeroAnimation";
 import { HowItWorksDeepDive } from "@/components/landing/HowItWorksDeepDive";
@@ -32,8 +33,8 @@ export default async function HomePage() {
       <header className="relative z-20 border-b border-[#D9CFC7] bg-[#F9F8F6]/90 backdrop-blur-md sticky top-0">
         <div className="max-w-7xl mx-auto px-6 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[#C9B59C]/20 border border-[#C9B59C]/40 flex items-center justify-center shadow-sm">
-              <span className="text-xl">🏛️</span>
+            <div className="w-9 h-9 rounded-xl overflow-hidden flex items-center justify-center">
+              <Image src="/olympus-logo.png" alt="Olympus Logo" width={36} height={36} className="object-contain" priority />
             </div>
             <div>
               <span className="font-bold text-base bg-gradient-to-r from-[#2C2621] via-[#A8947D] to-[#2C2621] bg-clip-text text-transparent tracking-wide">
@@ -346,7 +347,7 @@ export default async function HomePage() {
       <footer className="relative z-10 border-t border-[#D9CFC7] bg-[#EFE9E3] py-12 px-6 text-xs text-[#8C8075]">
         <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-center justify-between gap-6">
           <div className="flex items-center gap-3">
-            <span className="text-lg">🏛️</span>
+            <Image src="/olympus-logo.png" alt="Olympus Logo" width={28} height={28} className="object-contain" />
             <span className="font-bold text-[#2C2621]">Project Olympus</span>
             <span>— Autonomous SRE Engine</span>
           </div>

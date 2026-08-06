@@ -1,4 +1,4 @@
-import type { TriggerParams, TriggerResponse, RunRecord, HealthResponse } from "./types";
+import type { TriggerParams, TriggerResponse, RunRecord, HealthResponse, DependencyGraphData } from "./types";
 
 const BACKEND =
   process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:8000";
@@ -55,6 +55,19 @@ export function streamRunLogs(runId: string, callbacks: StreamCallbacks): EventS
   return es;
 }
 
+// ─── Dependency Graph ────────────────────────────────────────────────────────
+
+export async function fetchDependencyGraph(runId?: string): Promise<DependencyGraphData> {
+  try {
+    const url = runId ? `${BACKEND}/api/v1/dependency-graph?run_id=${runId}` : `${BACKEND}/api/v1/dependency-graph`;
+    const res = await fetch(url, { cache: "no-store" });
+    if (!res.ok) return { nodes: [], edges: [] };
+    return res.json();
+  } catch {
+    return { nodes: [], edges: [] };
+  }
+}
+
 // ─── Run History ─────────────────────────────────────────────────────────────
 
 export async function fetchRuns(limit = 50): Promise<RunRecord[]> {
@@ -77,3 +90,4 @@ export async function checkHealth(): Promise<HealthResponse | null> {
     return null;
   }
 }
+

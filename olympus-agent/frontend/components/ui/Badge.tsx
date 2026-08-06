@@ -1,4 +1,5 @@
 "use client";
+import React from "react";
 import { clsx } from "clsx";
 
 type Variant = "pass" | "fail" | "running" | "idle" | "warn" | "info";

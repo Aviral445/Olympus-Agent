@@ -40,10 +40,16 @@ from utils.run_logger import (
 )
 from utils.fault_localizer import discover_fault, extract_all_culprits
 from utils.language_detector import detect_repo_language, LANGUAGE_META
+from utils.code_graph import build_import_graph, graph_to_serializable
+
+
+# ─── Global Stores ────────────────────────────────────────────────────────────
+_graph_store: dict[str, dict] = {}
 
 
 # ─── App ──────────────────────────────────────────────────────────────────────
-app = FastAPI(title="Project Olympus SRE API", version="2.1.0")
+app = FastAPI(title="Project Olympus SRE API", version="3.0.0")
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -224,6 +230,16 @@ def run_olympus_pipeline(
 
 
 
+    # ── Dependency Graph Extraction (Phase 3) ───────────────────────────────────
+    graph_target = workspace_dir or os.path.dirname(active_target)
+    if graph_target and os.path.exists(graph_target):
+        try:
+            raw_g = build_import_graph(graph_target)
+            _graph_store[run_id] = graph_to_serializable(raw_g, graph_target)
+            print(f"🕸️ [Dependency Graph]: Stored import graph for run {run_id} ({len(_graph_store[run_id]['nodes'])} nodes).")
+        except Exception as ge:
+            print(f"⚠️ [Dependency Graph Error]: {ge}")
+
     # Seed the initial test_result with the discovered error context so the
     # patcher has a meaningful signal even before the first sandbox run.
     seed_error = discovered_error_ctx or "Initial run required"
@@ -239,6 +255,8 @@ def run_olympus_pipeline(
         "workspace_dir":     workspace_dir,
         "detected_language": detected_language,
         "last_diff":         "",
+        "error_class":       "",   # Populated by agent_router on first iteration
+        "agent_used":        "",   # Populated by agent_router on first iteration
         "history":           [],
     }
 
@@ -273,9 +291,28 @@ def health_check():
     return {
         "status":        "healthy",
         "service":       "Project Olympus SRE Engine",
-        "version":       "2.1.0",
+        "version":       "3.0.0",
         "kafka_enabled": is_kafka_enabled(),
     }
+
+
+@app.get("/api/v1/dependency-graph")
+def get_dependency_graph(run_id: Optional[str] = None, workspace_dir: Optional[str] = None):
+    """
+    Returns the JSON import graph {nodes: [], edges: []} for the given run_id or workspace.
+    """
+    if run_id and run_id in _graph_store:
+        return _graph_store[run_id]
+
+    target_dir = workspace_dir
+    if not target_dir:
+        target_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "../target_app"))
+
+    if target_dir and os.path.exists(target_dir):
+        raw = build_import_graph(target_dir)
+        return graph_to_serializable(raw, target_dir)
+
+    return {"nodes": [], "edges": []}
 
 
 @app.get("/api/v1/runs")
@@ -283,6 +320,7 @@ def list_runs(limit: int = 50):
     """Return paginated run history from the SQLite audit log."""
     runs = get_runs(limit=min(limit, 200))
     return {"runs": runs, "count": len(runs)}
+
 
 
 @app.get("/api/v1/stream/{run_id}")

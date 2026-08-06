@@ -134,16 +134,18 @@ def chunk_file_with_treesitter(file_path: str) -> list:
 
 # ─── Indexing ─────────────────────────────────────────────────────────────────
 
-def index_codebase_rag(target_dir: str, run_id: Optional[str] = None) -> None:
+def index_codebase_rag(target_dir: str, run_id: Optional[str] = None, repo_name: Optional[str] = None) -> None:
     """
     Walk target_dir and upsert AST chunks for all supported languages into ChromaDB.
 
     Phase 2: now indexes Python + JS/TS/Go/Java/Rust/Ruby/C/C++ files.
+    Phase 3: supports repo_name metadata for cross-repo indexing.
 
     Args:
         target_dir: Root directory to crawl for source files.
         run_id:     Optional pipeline run identifier — stored as metadata
                     on each chunk for traceability.
+        repo_name:  Optional repository name prefix to namespace chunk IDs and tag metadata.
     """
     clean_dir = Path(target_dir).resolve()
     if not clean_dir.exists():
@@ -154,6 +156,7 @@ def index_codebase_rag(target_dir: str, run_id: Optional[str] = None) -> None:
     metadatas = []
     ids       = []
     lang_counts: dict[str, int] = {}
+    rname = repo_name or os.path.basename(clean_dir)
 
     for root, dirs, files in os.walk(clean_dir):
         # Prune skip dirs in-place so os.walk doesn't descend into them
@@ -175,13 +178,19 @@ def index_codebase_rag(target_dir: str, run_id: Optional[str] = None) -> None:
                     "file":   os.path.basename(full_path),
                     "symbol": chunk.get("symbol", "file"),
                     "lang":   lang,
+                    "repo":   rname,
                 }
                 if run_id:
                     meta["run_id"] = run_id
 
-                documents.append(chunk["content"])
+                chunk_content = chunk["content"]
+                if repo_name:
+                    chunk_content = f"# Repo: {rname}\n{chunk_content}"
+
+                documents.append(chunk_content)
                 metadatas.append(meta)
-                ids.append(chunk["id"])
+                chunk_id = f"{rname}::{chunk['id']}" if repo_name else chunk["id"]
+                ids.append(chunk_id)
 
     if documents:
         try:
@@ -192,12 +201,25 @@ def index_codebase_rag(target_dir: str, run_id: Optional[str] = None) -> None:
             )
             lang_summary = ", ".join(f"{l}={c}" for l, c in sorted(lang_counts.items()))
             print(
-                f"🌲 [Tree-sitter RAG]: Indexed {len(documents)} AST chunks "
+                f"🌲 [Tree-sitter RAG]: Indexed {len(documents)} AST chunks ({rname}) "
                 f"[{lang_summary}] into ChromaDB."
                 + (f" (run_id={run_id})" if run_id else "")
             )
         except Exception as e:
             print(f"⚠️ [Tree-sitter RAG Indexing Error]: {e}")
+
+
+def index_multiple_repos(repo_dirs: list[str], run_id: Optional[str] = None) -> None:
+    """
+    Calls index_codebase_rag() for each directory in repo_dirs,
+    namespacing chunk IDs by repo to avoid collisions across repos.
+    """
+    print(f"📚 [Cross-Repo RAG]: Indexing {len(repo_dirs)} repositories for cross-repo context...")
+    for rdir in repo_dirs:
+        if os.path.exists(rdir):
+            repo_name = os.path.basename(os.path.normpath(rdir))
+            index_codebase_rag(rdir, run_id=run_id, repo_name=repo_name)
+
 
 
 # ─── Retrieval (hybrid BM25 + vector) ────────────────────────────────────────

@@ -26,10 +26,10 @@ load_dotenv(find_dotenv(), override=True)
 
 from utils.sast_scanner import run_sast_scan
 from utils.attestation import sign_patch_attestation
-from utils.code_graph import build_repository_map
+from utils.code_graph import build_repository_map, build_import_graph, rank_by_fault_proximity
 from utils.telemetry import trace_span
 from utils.sandbox import run_in_sandbox
-from utils.git_manager import init_fix_branch, generate_patch_diff, commit_patch
+from utils.git_manager import init_fix_branch, generate_patch_diff, commit_patch, commit_patch_batch, generate_multi_file_diff
 from utils.run_logger import push_log
 
 from database.db import init_db
@@ -52,6 +52,8 @@ class AgentState(TypedDict):
     detected_language: str     # Phase 2: primary language of the repo ("python", "javascript", etc.)
     history: List[str]
     last_diff: str
+    error_class: str           # Phase 3: "ImportError" | "TypeError" | "LogicError"
+    agent_used: str            # Phase 3: "ImportResolverAgent" | "TypeFixAgent" | "LogicRepairAgent"
 
 
 # ─── Language-aware LLM prompt templates (Phase 2) ─────────────────────────────────────────────────────
@@ -122,7 +124,6 @@ def invoke_llm_with_fallback(prompt: str) -> str:
             print("📡 [LLM Engine]: Requesting patch via OpenRouter (openrouter/auto)...")
             push_log("📡 [LLM Engine]: Requesting patch via OpenRouter (openrouter/auto)...")
             from langchain_openai import ChatOpenAI
-            # FIX: corrected URL — was accidentally stored with markdown link syntax
             llm_openrouter = ChatOpenAI(
                 model="openrouter/auto",
                 openai_api_key=openrouter_key,
@@ -150,72 +151,103 @@ def invoke_llm_with_fallback(prompt: str) -> str:
 
     raise RuntimeError("No operational LLM key found across Groq, OpenRouter, or Gemini.")
 
-# 2. Agent Nodes
-def patch_agent(state: AgentState) -> Dict:
+# 2. Agent Router & Specialized Agent Nodes (Phase 3)
+
+def agent_router(state: AgentState) -> Dict:
+    """
+    Classifies the error traceback and routes to the appropriate specialist sub-agent.
+    """
+    test_res = state.get("test_result", "")
+
+    if re.search(r"ImportError|ModuleNotFoundError|Cannot find module|no required module|Package .* does not exist|missing require|npm ERR!|go: module .* not found", test_res, re.I):
+        err_cls = "ImportError"
+        agent_name = "ImportResolverAgent"
+    elif re.search(r"TypeError|AttributeError|undefined is not a function|NullPointerException|ReferenceError|NoSuchMethodError|type mismatch", test_res, re.I):
+        err_cls = "TypeError"
+        agent_name = "TypeFixAgent"
+    else:
+        err_cls = "LogicError"
+        agent_name = "LogicRepairAgent"
+
+    log_msg = f"🔀 [Agent Router]: Classified error as '{err_cls}' → Routing to {agent_name}"
+    print(log_msg)
+    push_log(log_msg)
+
+    return {
+        "error_class": err_cls,
+        "agent_used":  agent_name,
+    }
+
+def route_to_specialist(state: AgentState) -> str:
+    """Conditional router function for StateGraph."""
+    agent_used = state.get("agent_used", "LogicRepairAgent")
+    if agent_used == "ImportResolverAgent":
+        return "import_resolver"
+    elif agent_used == "TypeFixAgent":
+        return "type_fix"
+    else:
+        return "logic_repair"
+
+
+def _run_specialist_patch(state: AgentState, agent_name: str, specialist_instructions: str) -> Dict:
+    """Shared core patch execution engine for specialized agents."""
     current_attempts = state.get("attempt_count", 0) + 1
 
-    with trace_span("patch_agent", {"attempt": current_attempts}):
-        # ── Build the ordered list of files to patch this cycle ────────────────
+    with trace_span(agent_name.lower(), {"attempt": current_attempts}):
         target_files: List[str] = state.get("target_files") or []
         primary_file = state.get("target_file", "")
 
-        # Ensure primary_file is always first in the list (de-duplicated)
         if primary_file and primary_file not in target_files:
             target_files = [primary_file] + target_files
 
-        # Final fallback — if nothing was resolved, use the default target_app file
         if not target_files or not any(os.path.exists(f) for f in target_files):
             fallback = os.path.abspath(
                 os.path.join(os.path.dirname(__file__), "../../target_app/app.py")
             )
             target_files = [fallback]
 
-        # Filter to only files that actually exist on disk
         target_files = [f for f in target_files if os.path.exists(f)]
         active_primary = target_files[0] if target_files else primary_file
 
         header_msg = (
-            f"\n🤖 [Patch Agent]: Attempt #{current_attempts} — "
+            f"\n🤖 [{agent_name}]: Attempt #{current_attempts} — "
             f"targeting {len(target_files)} file(s): "
             f"{[os.path.basename(f) for f in target_files]}"
         )
         print(header_msg)
         push_log(header_msg)
 
-        # ── Shared RAG / Memory context (built once per attempt cycle) ─────────
-        # Re-index using the directory of the primary target file
         target_dir = os.path.dirname(active_primary)
         index_codebase_rag(target_dir)
 
         rag_code_context = retrieve_relevant_code_context(state.get("test_result", ""))
         memory_lessons   = retrieve_similar_experiences(state.get("test_result", ""))
 
-        # ── Per-file patch loop ────────────────────────────────────────────────
         combined_diff     = ""
         last_fixed_code   = ""
         patched_files: List[str] = []
         sast_blocked: List[str]  = []
 
-        # Create/switch branch once before the loop so all file commits land together
         init_fix_branch(f"olympus/patch-attempt-{current_attempts}")
 
         for file_path in target_files:
             file_name = os.path.basename(file_path)
-            push_log(f"🔧 [Patch Agent]: Patching {file_name}...")
+            push_log(f"🔧 [{agent_name}]: Patching {file_name}...")
 
             try:
                 with open(file_path, "r", encoding="utf-8") as fh:
                     current_code = fh.read()
             except OSError as read_err:
-                push_log(f"⚠️ [Patch Agent]: Cannot read {file_name} — {read_err}. Skipping.")
+                push_log(f"⚠️ [{agent_name}]: Cannot read {file_name} — {read_err}. Skipping.")
                 continue
 
-            # Select language-aware prompt template
             lang = state.get("detected_language", "python") or "python"
             lang_instruction = LANG_PROMPTS.get(lang, _DEFAULT_LANG_PROMPT)
 
             prompt = f"""
         {lang_instruction}
+
+        {specialist_instructions}
 
         {rag_code_context}
 
@@ -230,12 +262,10 @@ def patch_agent(state: AgentState) -> Dict:
 
         INSTRUCTIONS:
         - Inspect the retrieved test assertions and error tracebacks carefully.
-        - Pay close attention to boundary condition checks (e.g. return 0 vs raise ValueError).
-        - Satisfy all test assertions at once without causing oscillation.
         - Only output the corrected code for {file_name}. Do not include any other files.
             """
 
-            push_log(f"🧠 [LLM Engine]: Generating patch for {file_name}...")
+            push_log(f"🧠 [LLM Engine]: Generating patch for {file_name} via {agent_name}...")
             try:
                 raw_response = invoke_llm_with_fallback(prompt)
             except Exception as llm_err:
@@ -244,7 +274,6 @@ def patch_agent(state: AgentState) -> Dict:
 
             fixed_code = clean_llm_code_output(raw_response)
 
-            # SAST gate — scan proposed code in a temp file before writing
             temp_path = file_path + ".olympus_tmp"
             with open(temp_path, "w", encoding="utf-8") as tf:
                 tf.write(fixed_code)
@@ -260,10 +289,10 @@ def patch_agent(state: AgentState) -> Dict:
                 print(block_msg)
                 push_log(block_msg)
                 sast_blocked.append(file_path)
-                continue  # Try remaining files in the list
+                continue
 
             push_log(f"✅ [SAST Gate]: {file_name} passed. Applying...")
-            os.replace(temp_path, file_path)  # Atomic swap after SAST pass
+            os.replace(temp_path, file_path)
 
             file_diff = generate_patch_diff(file_path)
             if file_diff:
@@ -273,17 +302,15 @@ def patch_agent(state: AgentState) -> Dict:
                 push_log(diff_msg)
 
             sign_patch_attestation(file_diff or "", f"patch-attempt-{current_attempts}-{file_name}")
-            commit_patch(file_path, current_attempts)
-
             patched_files.append(file_path)
             last_fixed_code = fixed_code
-            push_log(f"📝 [Patch Agent]: Committed patch for {file_name}")
 
-        # ── Summarise attempt results ─────────────────────────────────────────
-        if not patched_files:
-            # All files were SAST-blocked or errored
+        if patched_files:
+            commit_patch_batch(patched_files, current_attempts)
+            push_log(f"📝 [{agent_name}]: Atomic batch commit complete for {len(patched_files)} file(s).")
+        else:
             fail_msg = (
-                f"🚨 [Patch Agent]: Attempt #{current_attempts} — no files patched "
+                f"🚨 [{agent_name}]: Attempt #{current_attempts} — no files patched "
                 f"(SAST blocked: {[os.path.basename(f) for f in sast_blocked]})."
             )
             print(fail_msg)
@@ -295,11 +322,13 @@ def patch_agent(state: AgentState) -> Dict:
                 "target_files":  target_files,
                 "last_diff":     "",
                 "detected_language": state.get("detected_language", "python"),
+                "error_class":   state.get("error_class", "LogicError"),
+                "agent_used":    agent_name,
                 "history":       state["history"] + [f"SAST gate blocked all patches v{current_attempts}"],
             }
 
         done_msg = (
-            f"📝 [Patch Agent]: Attempt #{current_attempts} complete — "
+            f"📝 [{agent_name}]: Attempt #{current_attempts} complete — "
             f"patched {len(patched_files)}/{len(target_files)} file(s)."
         )
         print(done_msg)
@@ -312,8 +341,47 @@ def patch_agent(state: AgentState) -> Dict:
             "target_files":  target_files,
             "last_diff":     combined_diff.strip(),
             "detected_language": state.get("detected_language", "python"),
-            "history":       state["history"] + [f"Applied fix v{current_attempts} to {len(patched_files)} file(s)"],
+            "error_class":   state.get("error_class", "LogicError"),
+            "agent_used":    agent_name,
+            "history":       state["history"] + [f"Applied fix v{current_attempts} via {agent_name}"],
         }
+
+
+def import_resolver_agent(state: AgentState) -> Dict:
+    """Specialist Agent for ImportError, ModuleNotFoundError, and missing requirements/exports."""
+    push_log("📦 [Import Resolver Agent]: Resolving missing modules and import edge mismatches...")
+    spec_instr = (
+        "SPECIALIST INSTRUCTION (Import Resolver Agent):\n"
+        "Focus specifically on fixing module import statements, missing package dependencies, "
+        "wrong relative import paths, or missing export declarations."
+    )
+    return _run_specialist_patch(state, "ImportResolverAgent", spec_instr)
+
+
+def type_fix_agent(state: AgentState) -> Dict:
+    """Specialist Agent for TypeError, AttributeError, null/undefined safety, and signature mismatches."""
+    push_log("🏷️ [Type Fix Agent]: Resolving type mismatches, null safety, and method signatures...")
+    spec_instr = (
+        "SPECIALIST INSTRUCTION (Type Fix Agent):\n"
+        "Focus specifically on resolving type mismatches, missing methods or attributes, "
+        "null/undefined safety checks, and function parameter signature mismatches."
+    )
+    return _run_specialist_patch(state, "TypeFixAgent", spec_instr)
+
+
+def logic_repair_agent(state: AgentState) -> Dict:
+    """Specialist Agent for ValueError, IndexError, AssertionError, and general logic failures."""
+    push_log("🧩 [Logic Repair Agent]: Repairing algorithmic logic, boundary conditions, and test assertions...")
+    spec_instr = (
+        "SPECIALIST INSTRUCTION (Logic Repair Agent):\n"
+        "Focus specifically on resolving algorithmic logic errors, boundary condition failures, "
+        "off-by-one errors, and test assertion mismatches."
+    )
+    return _run_specialist_patch(state, "LogicRepairAgent", spec_instr)
+
+
+# Backward-compatible alias
+patch_agent = logic_repair_agent
 
 
 def validation_agent(state: AgentState) -> Dict:
@@ -344,6 +412,8 @@ def validation_agent(state: AgentState) -> Dict:
             return {
                 "test_result":  "PASS",
                 "target_files": state.get("target_files", [target_file_path]),
+                "error_class":  state.get("error_class", ""),
+                "agent_used":   state.get("agent_used", ""),
                 "history":      state["history"] + ["Tests passed."],
             }
 
@@ -360,16 +430,11 @@ def validation_agent(state: AgentState) -> Dict:
             error_logs=logs,
         )
 
-        # ── Re-discover culprit files from the new failure traceback ──────────
-        # Parse ALL non-test .py references so the next patch cycle targets every
-        # file that the new failure mentions — not just the original primary.
         base_dir = workspace_dir or os.path.dirname(target_file_path)
 
         updated_files: List[str] = []
         seen_paths: set = set()
 
-        # Pattern 1 — pytest / CPython: File "path.py"
-        # Pattern 2 — ruff/bandit style: path.py:lineno
         trace_patterns = [
             r'File\s+"([^"]+\.py)"',
             r'([\w./\\-]+\.py):\d+',
@@ -390,9 +455,18 @@ def validation_agent(state: AgentState) -> Dict:
                 print(note)
                 push_log(note)
 
-        # Fall back to the current primary if nothing new was found
         if not updated_files:
             updated_files = [target_file_path]
+
+        # Phase 3: Rank culprit files by proximity in the import graph
+        if base_dir and os.path.exists(base_dir):
+            try:
+                graph = build_import_graph(base_dir)
+                if graph and len(updated_files) > 1:
+                    updated_files = rank_by_fault_proximity(updated_files[0], graph, updated_files)
+                    push_log(f"🕸️ [Import Graph Proximity]: Re-ranked culprits -> {[os.path.basename(f) for f in updated_files]}")
+            except Exception as graph_err:
+                print(f"⚠️ [Import Proximity Ranking Error]: {graph_err}")
 
         new_primary = updated_files[0]
 
@@ -423,7 +497,6 @@ def human_intervention(state: AgentState) -> Dict:
 def should_continue(state: AgentState) -> str:
     if "PASS" in state["test_result"]:
         return END
-    # FIX: use max_attempts from state (passed in by API) instead of hardcoded 5
     max_att = state.get("max_attempts", 5)
     if state["attempt_count"] >= max_att:
         push_log(f"🚨 [Olympus]: Max attempts ({max_att}) reached. Escalating to human review.")
@@ -431,18 +504,33 @@ def should_continue(state: AgentState) -> str:
     push_log(f"🔄 [Olympus]: Retrying... (attempt {state['attempt_count']} / {max_att})")
     return "try_again"
 
-# 3. Graph Assembly
+# 3. Graph Assembly (Phase 3 Multi-Agent Routing Topology)
 workflow = StateGraph(AgentState)
-workflow.add_node("patcher", patch_agent)
+workflow.add_node("agent_router", agent_router)
+workflow.add_node("import_resolver", import_resolver_agent)
+workflow.add_node("type_fix", type_fix_agent)
+workflow.add_node("logic_repair", logic_repair_agent)
 workflow.add_node("validator", validation_agent)
 workflow.add_node("human_gate", human_intervention)
 
-workflow.set_entry_point("patcher")
-workflow.add_edge("patcher", "validator")
+workflow.set_entry_point("agent_router")
+workflow.add_conditional_edges(
+    "agent_router",
+    route_to_specialist,
+    {
+        "import_resolver": "import_resolver",
+        "type_fix":        "type_fix",
+        "logic_repair":    "logic_repair",
+    }
+)
+workflow.add_edge("import_resolver", "validator")
+workflow.add_edge("type_fix", "validator")
+workflow.add_edge("logic_repair", "validator")
+
 workflow.add_conditional_edges(
     "validator",
     should_continue,
-    {"try_again": "patcher", "human_call": "human_gate", END: END}
+    {"try_again": "agent_router", "human_call": "human_gate", END: END}
 )
 workflow.add_edge("human_gate", END)
 app = workflow.compile()
@@ -457,11 +545,14 @@ if __name__ == "__main__":
         "target_file": "",
         "target_files": [],       # Populated by fault_localizer in server.py at runtime
         "workspace_dir": "",
+        "detected_language": "python",  # Default language for direct execution
         "last_diff": "",
+        "error_class": "",
+        "agent_used": "",
         "history": []
     }
     
-    print("🚀 Starting Project Olympus Execution Pipeline with Tree-sitter RAG & Memory...")
+    print("🚀 Starting Project Olympus Execution Pipeline with Phase 3 Agent Router...")
     final_state = app.invoke(initial_state)
     
     if "PASS" in final_state.get("test_result", ""):
@@ -470,6 +561,7 @@ if __name__ == "__main__":
         print("="*60)
         print(f"📌 Target File : {os.path.basename(final_state.get('target_file', ''))}")
         print(f"🔄 Attempts Taken: {final_state.get('attempt_count')}")
+        print(f"🤖 Specialist Used: {final_state.get('agent_used', '')}")
         print("\n🔍 [SUMMARY OF CHANGES (GIT DIFF)]:")
         print(final_state.get("last_diff") or "No visible diff.")
-        print("="*60 + "\n")
+        print("="*60 + "\n")
